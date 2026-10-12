@@ -115,10 +115,15 @@ ok(!noComm.ok && /комисс/.test(noComm.reason), 'без комиссии �
 // ============================================ 5. КОМИССИЯ
 
 console.log('=== 5. Фактическая комиссия из отчёта о реализации ===');
-function row(oid, sku, amount, fee, qty, ratio, total) {
+function row(oid, sku, amount, fee, qty, ratio, total, sellerPrice, adjustments) {
+  const adj = adjustments || {};
   return { item: { offer_id: oid, sku: sku, name: 'Товар ' + oid },
            commission_ratio: ratio,
-           delivery_commission: { amount: amount, standard_fee: fee, commission: 0, total: total, quantity: qty } };
+           seller_price_per_instance: sellerPrice === undefined ? amount / qty : sellerPrice,
+           delivery_commission: { amount: amount, standard_fee: fee, commission: 0, total: total, quantity: qty,
+             bonus: adj.bonus || 0, bank_coinvestment: adj.bank_coinvestment || 0, stars: adj.stars || 0,
+             pick_up_point_coinvestment: adj.pick_up_point_coinvestment || 0,
+             compensation: adj.compensation || 0 } };
 }
 const rows = [];
 for (let i = 0; i < 12; i++) rows.push(row('SKU-' + i, 910000 + i, 10000, 4800, 10, 0.495, 5200));
@@ -129,11 +134,25 @@ near(s.factPercent, 48, 0.01, 'фактически удержано 48%');
 near(s.discountWeighted, 1.5, 0.01, 'скидка 1,5 п.п.');
 near(s.amount, 120000, 0.01, 'реализовано 120 000 ₽');
 near(s.fee, 57600, 0.01, 'удержано 57 600 ₽');
-ok(s.controlPassed === true, 'самоконтроль «реализовано − комиссия ≈ к начислению» сошёлся',
+ok(s.controlPassed === true, 'самоконтроль с корректировками начисления сошёлся',
    String(s.controlDeviationPercent));
 ok(cm.isTrustworthy(s).trustworthy, 'замеру можно верить');
 
-// взвешивание по выручке, а не среднее по артикулам
+// Синтетический регрессионный пример (не доказательство семантики API): amount
+// ниже seller-базы из-за корректировки. Старый знаменатель дал бы 82,5% вместо 49,5%.
+const auditRegression = cm.summarize(cm.aggregate([
+  row('BASE-CHECK', 2, 600, 495, 1, 0.495, 505, 1000, { bonus: 400 })
+]));
+near(auditRegression.commissionBase, 1000, 0.001, 'база = seller_price_per_instance × quantity');
+near(auditRegression.factPercent, 49.5, 0.01, 'ставка рассчитана от базы продавца');
+near(auditRegression.fee / auditRegression.amount * 100, 82.5, 0.01, 'старый знаменатель даёт завышенный процент');
+near(auditRegression.listPercent, 49.5, 0.01, 'ставка категории обрабатывается независимо от amount');
+near(auditRegression.discountWeighted, 0, 0.01, 'при совпадении ставок скидка не выводится');
+ok(auditRegression.controlPassed === true, 'total сверяется с бонусом и другими корректировками',
+   String(auditRegression.controlDeviationPercent));
+ok(auditRegression.rowsWithoutBase === 0, 'для строки доступна база продавца');
+
+// взвешивание по базе продавца, а не среднее по артикулам
 const skewed = cm.summarize(cm.aggregate([
   row('BIG', 1, 1000000, 480000, 1000, 0.495, 520000),
   row('TINY', 2, 10, 0, 1, 0.495, 10)

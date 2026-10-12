@@ -125,11 +125,10 @@ function factHeaders_() {
 // ============================================================
 
 /**
- * Строка «Скидка к комиссии Ozon (отсрочка выплаты), п.п.» в листе «Параметры».
- * Ozon её нигде не отдаёт: в /v5/product/info/prices всегда списочная ставка
- * (у вас 49,5%), а фактически с учётом отсрочки выплаты 84 дня — меньше.
- * Значение задаётся вручную и проверяется меню «Проверить комиссию по заказам».
- * Возвращает скидку в процентных пунктах.
+ * Читает существующее значение B14 «Скидка к комиссии Ozon, п.п.».
+ * Это настройка расчёта, а не подтверждённый замер: аудит 18 строк не выявил
+ * отдельной скидки. Здесь значение не меняется; отчёт может обновить его только
+ * при достаточной выборке и прошедшем контроле начисления.
  */
 function ensureParams_() {
   const def = CFG.COMMISSION_DISCOUNT_DEFAULT;
@@ -148,9 +147,9 @@ function ensureParams_() {
     row = last + 1;
     par.getRange(row, 1, 1, 3).setValues([[
       'Скидка к комиссии Ozon (отсрочка выплаты), п.п.', def,
-      'API её не отдаёт: в /v5/product/info/prices всегда списочная ставка (49,5%). ' +
-      'Колонки W/X «Факт Ozon» = ставка минус эта скидка. Факт проверяется меню ' +
-      '«Проверить комиссию по заказам» (commission_amount / price из реальных отправлений).'
+      'Текущая настройка, не подтверждённая сырым аудитом. Комиссионная ставка ' +
+      'в отчёте считается как standard_fee / (seller_price_per_instance × quantity). ' +
+      'B14 меняется только при достаточной выборке и прошедшей сверке начисления.'
     ]]);
     par.getRange(row, 2).setNumberFormat('0.0');
     logMsg_('INFO', '«Параметры»: добавлена строка «Скидка к комиссии Ozon» = ' + def +
@@ -1208,11 +1207,11 @@ function diagDrrRaw() {
 // ФАКТИЧЕСКАЯ КОМИССИЯ: отчёт о реализации против списочной ставки
 // ============================================================
 
-/** Шапка листа «Комиссия факт» (12 колонок, A..L). */
+/** Шапка листа «Комиссия факт» (13 колонок, A..M). */
 function commHeaders_() {
-  return ['Offer id', 'SKU', 'Наименование', 'Реализовано, ₽', 'Комиссия удержана, ₽',
-          'К начислению, ₽', 'Продано, шт', 'Ставка по категории, %', 'Комиссия факт, %',
-          'Разница, п.п.', 'Источник', 'Период'];
+  return ['Offer id', 'SKU', 'Наименование', 'Реализовано, ₽', 'База комиссии, ₽',
+          'Комиссия удержана, ₽', 'К начислению, ₽', 'Продано, шт',
+          'Ставка по категории, %', 'Комиссия факт, %', 'Разница, п.п.', 'Источник', 'Период'];
 }
 
 /**
@@ -1228,31 +1227,40 @@ function ratioToPercent_(v) {
 /**
  * ФАКТИЧЕСКАЯ КОМИССИЯ ПО ОТЧЁТУ О РЕАЛИЗАЦИИ.
  *
- * Зачем: в /v5/product/info/prices всегда СПИСОЧНАЯ ставка (49,5%), а скидку за
- * отсрочку выплаты на 84 дня Ozon в ценах и тарифах не показывает. В отчёте о
- * реализации видны обе величины: commission_ratio (ставка по категории) и
- * standard_fee / amount (что реально удержали). Их разница и есть скидка.
+ * Сырой аудит 18 строк API подтвердил: standard_fee соответствует
+ * commission_ratio × seller_price_per_instance × quantity. Знаменатель
+ * delivery_commission.amount — другая ценовая база; деление на него даёт ставки
+ * выше 100%. Ставка считается от цены продавца, а amount и корректировки
+ * используются отдельно для сверки начисления.
  *
  * Источники по порядку:
  *   1. /v1/finance/realization/by-day — по дням (нужен Premium Plus/Pro, ≤32 дней);
  *   2. /v2/finance/realization — за последний закрытый месяц;
  *   3. /v3/posting/fbo|fbs/list с financial_data — комиссия по отправлениям.
  *
- * Результат: лист «Комиссия факт» (по каждому артикулу) и, если данных достаточно,
- * обновлённая строка «Скидка к комиссии Ozon, п.п.» в «Параметрах».
+ * Результат: лист «Комиссия факт» (по каждому артикулу). B14 меняется только
+ * при достаточной выборке, положительной разнице ставок и прошедшей сверке total
+ * с корректировками; если ставки совпадают, B14 не меняется.
  */
 function diagCommission(days) {
   const t0 = Date.now();
   const tz = Session.getScriptTimeZone();
   const wantDays = Math.min(Math.max(Number(days) || CFG.REALIZATION_DAYS, 1), CFG.REALIZATION_MAX_DAYS);
-  const agg = {};          // offer_id → {sku, name, amount, fee, total, qty, ratioW, rows}
+  const agg = {};          // offer_id → суммы и база seller_price_per_instance × quantity
   let source = '', period = '', note = '';
 
   function bucket(offer, sku, name) {
     return agg[offer] || (agg[offer] = {
       sku: String(sku || ''), name: String(name || ''),
-      amount: 0, fee: 0, total: 0, qty: 0, ratioW: 0, rows: 0
+      amount: 0, commissionBase: 0, fee: 0, total: 0, adjustments: 0,
+      expectedTotal: 0, qty: 0, ratioW: 0, rows: 0, rowsWithoutBase: 0
     });
+  }
+
+  function commissionAdjustments(dc) {
+    return (Number(dc.bonus) || 0) + (Number(dc.bank_coinvestment) || 0) +
+      (Number(dc.stars) || 0) + (Number(dc.pick_up_point_coinvestment) || 0) +
+      (Number(dc.compensation) || 0);
   }
 
   /** Разбор строк отчёта о реализации (by-day и v2 — структура одинаковая). */
@@ -1262,18 +1270,26 @@ function diagCommission(days) {
       const it = r.item || {};
       const dc = r.delivery_commission || {};
       const amount = Number(dc.amount) || 0;
-      // standard_fee — «Базовое вознаграждение Ozon» (что удержали).
-      // commission — «Итого комиссия с учётом скидок и наценки», заполнялось только
-      // в отчётах до 30.04.2024, поэтому берём его лишь как запасной вариант.
+      const quantity = Number(dc.quantity) || 0;
+      const sellerPrice = Number(r.seller_price_per_instance) || 0;
+      const commissionBase = sellerPrice * quantity;
+      // standard_fee — «Базовое вознаграждение Ozon» в ₽.
+      // commission — fallback для старых отчётов до 30.04.2024.
       const fee = Number(dc.standard_fee) || Number(dc.commission) || 0;
+      const total = Number(dc.total) || 0;
+      const adjustments = commissionAdjustments(dc);
       const offer = String(it.offer_id || '').trim();
-      if (!offer || (!amount && !fee)) return;
+      if (!offer || (!amount && !fee && !commissionBase && !total)) return;
       const a = bucket(offer, it.sku, it.name);
       a.amount += amount;
+      a.commissionBase += commissionBase;
       a.fee += fee;
-      a.total += Number(dc.total) || 0;
-      a.qty += Number(dc.quantity) || 0;
-      a.ratioW += ratioToPercent_(r.commission_ratio) * amount;
+      a.total += total;
+      a.adjustments += adjustments;
+      a.expectedTotal += amount - fee + adjustments;
+      a.qty += quantity;
+      a.ratioW += ratioToPercent_(r.commission_ratio) * commissionBase;
+      if ((amount || fee || total) && !(commissionBase > 0)) a.rowsWithoutBase++;
       a.rows++;
       added++;
     });
@@ -1382,7 +1398,8 @@ function diagCommission(days) {
             }
           }
           const a = bucket(offer, pr.sku, pr.name);
-          a.amount += amount; a.fee += fee; a.total += Number(f.payout) || 0; a.qty += qty;
+          a.amount += amount; a.commissionBase += amount; a.fee += fee;
+          a.total += Number(f.payout) || 0; a.expectedTotal += amount - fee; a.qty += qty;
           // списочную ставку для отправлений берём из прайса (см. ниже)
           a.rows++;
         });
@@ -1403,7 +1420,7 @@ function diagCommission(days) {
         offers.forEach(function (o) {
           const cm = (prices[o] || {}).commissions || {};
           const pct = Number(cm.sales_percent_fbo || cm.sales_percent_fbs) || 0;
-          if (pct) agg[o].ratioW = pct * agg[o].amount;
+          if (pct) agg[o].ratioW = pct * agg[o].commissionBase;
         });
       } catch (e) {
         logMsg_('WARN', 'Комиссия: списочные ставки не получены — ' + e.message);
@@ -1418,41 +1435,47 @@ function diagCommission(days) {
     return { ok: false, note: note || 'нет данных ни в одном источнике' };
   }
 
-  // ---------- считаем ставки ----------
-  let sumAmount = 0, sumFee = 0, sumTotal = 0, sumQty = 0, sumRatioW = 0;
+  // ---------- считаем ставку от базы продавца ----------
+  let sumAmount = 0, sumBase = 0, sumFee = 0, sumTotal = 0, sumAdjustments = 0;
+  let sumExpectedTotal = 0, sumQty = 0, sumRatioW = 0, rowsWithoutBase = 0;
   const deltas = [];
   offers.forEach(function (o) {
     const a = agg[o];
-    a.listPct = a.amount ? Math.round(a.ratioW / a.amount * 100) / 100 : 0;
-    a.factPct = a.amount ? Math.round(a.fee / a.amount * 10000) / 100 : 0;
+    a.listPct = a.commissionBase ? Math.round(a.ratioW / a.commissionBase * 100) / 100 : 0;
+    a.factPct = a.commissionBase ? Math.round(a.fee / a.commissionBase * 10000) / 100 : 0;
     a.delta = (a.listPct && a.factPct) ? Math.round((a.listPct - a.factPct) * 100) / 100 : '';
     if (a.delta !== '' && a.delta > 0.05 && a.delta < 15) deltas.push(a.delta);
-    sumAmount += a.amount; sumFee += a.fee; sumTotal += a.total; sumQty += a.qty; sumRatioW += a.ratioW;
+    sumAmount += a.amount; sumBase += a.commissionBase; sumFee += a.fee; sumTotal += a.total;
+    sumAdjustments += a.adjustments; sumExpectedTotal += a.expectedTotal;
+    sumQty += a.qty; sumRatioW += a.ratioW; rowsWithoutBase += a.rowsWithoutBase;
   });
-  const listAll = sumAmount ? Math.round(sumRatioW / sumAmount * 100) / 100 : 0;
-  const factAll = sumAmount ? Math.round(sumFee / sumAmount * 10000) / 100 : 0;
+  const listAll = sumBase ? Math.round(sumRatioW / sumBase * 100) / 100 : 0;
+  const factAll = sumBase ? Math.round(sumFee / sumBase * 10000) / 100 : 0;
   const deltaAll = Math.round((listAll - factAll) * 100) / 100;
   deltas.sort(function (x, y) { return x - y; });
   const med = deltas.length ? deltas[Math.floor(deltas.length / 2)] : 0;
   const spread = deltas.length ? Math.round((deltas[deltas.length - 1] - deltas[0]) * 100) / 100 : 0;
 
-  // внутренний контроль: «Реализовано» − «Комиссия» должно быть близко к «Итого к начислению»
-  const checkDiff = sumAmount && sumTotal ? Math.round((sumAmount - sumFee - sumTotal) / sumAmount * 10000) / 100 : null;
+  // API-сверка: total = amount - standard_fee + bonus + bank_coinvestment +
+  // stars + pick_up_point_coinvestment + compensation.
+  const checkDiff = sumBase ? Math.round((sumExpectedTotal - sumTotal) / sumBase * 10000) / 100 : null;
+  const controlPassed = checkDiff !== null && Math.abs(checkDiff) < 0.05 && rowsWithoutBase === 0;
 
   logMsg_('INFO', 'Комиссия [' + source + '], период ' + period + ': артикулов ' + offers.length +
-    ', реализовано ' + Math.round(sumAmount) + ' ₽, удержано ' + Math.round(sumFee) + ' ₽, шт ' + sumQty);
+    ', реализация ' + Math.round(sumAmount) + ' ₽, база продавца ' + Math.round(sumBase) +
+    ' ₽, удержано ' + Math.round(sumFee) + ' ₽, шт ' + sumQty);
   logMsg_('INFO', 'Комиссия: ставка по категории ' + listAll + '%, фактически удержано ' + factAll +
-    '% → СКИДКА ' + deltaAll + ' п.п. (медиана по артикулам ' + med + ', разброс ' + spread + ' п.п.)');
+    '% → разница ' + deltaAll + ' п.п. (медиана по артикулам ' + med + ', разброс ' + spread + ' п.п.)');
   if (checkDiff !== null) {
-    logMsg_(Math.abs(checkDiff) < 3 ? 'DEBUG' : 'WARN',
-      'Контроль отчёта: реализовано − комиссия − «к начислению» = ' + checkDiff + '% от суммы' +
-      (Math.abs(checkDiff) < 3 ? ' (сходится, standard_fee — это реально удержанная комиссия)'
-                                : ' — расходится, значит в отчёте есть другие удержания; смотрите лист'));
+    logMsg_(controlPassed ? 'DEBUG' : 'WARN',
+      'Контроль начисления с корректировками: ожидаемо ' + Math.round(sumExpectedTotal * 100) / 100 +
+      ' ₽, API total ' + Math.round(sumTotal * 100) / 100 + ', отклонение ' + checkDiff +
+      '% от базы продавца' + (controlPassed ? ' (сходится)' : ' — скидку не обновляю'));
   }
   offers.slice(0, 5).forEach(function (o) {
     const a = agg[o];
-    logMsg_('DEBUG', 'Пример: ' + o + ' — реализовано ' + Math.round(a.amount) + ' ₽, удержано ' +
-      Math.round(a.fee) + ' ₽ = ' + a.factPct + '% при ставке категории ' + a.listPct + '%');
+    logMsg_('DEBUG', 'Пример: ' + o + ' — комиссия ' + Math.round(a.fee) + ' ₽ / база продавца ' +
+      Math.round(a.commissionBase) + ' ₽ = ' + a.factPct + '% при ставке категории ' + a.listPct + '%');
   });
 
   // ---------- лист «Комиссия факт» ----------
@@ -1461,8 +1484,8 @@ function diagCommission(days) {
   const list = offers.map(function (o) {
     const a = agg[o];
     return [o, a.sku, a.name,
-            Math.round(a.amount * 100) / 100, Math.round(a.fee * 100) / 100,
-            Math.round(a.total * 100) / 100, a.qty,
+            Math.round(a.amount * 100) / 100, Math.round(a.commissionBase * 100) / 100,
+            Math.round(a.fee * 100) / 100, Math.round(a.total * 100) / 100, a.qty,
             a.listPct || '', a.factPct || '', a.delta === '' ? '' : a.delta,
             source, period];
   }).sort(function (x, y) { return Number(y[3]) - Number(x[3]); });
@@ -1472,27 +1495,33 @@ function diagCommission(days) {
   sh.getRange(2, 1, Math.max(sh.getMaxRows() - 1, 1), headers.length).clearContent();
   if (list.length) {
     sh.getRange(2, 1, list.length, headers.length).setValues(list);
-    sh.getRange(2, 4, list.length, 3).setNumberFormat('#,##0.00');
-    sh.getRange(2, 8, list.length, 3).setNumberFormat('0.00');
+    sh.getRange(2, 4, list.length, 4).setNumberFormat('#,##0.00');
+    sh.getRange(2, 8, list.length, 1).setNumberFormat('0');
+    sh.getRange(2, 9, list.length, 3).setNumberFormat('0.00');
   }
-  sh.getRange(1, 14, 9, 2).setValues([
+  sh.getRange(1, 14, 12, 2).clearContent();
+  sh.getRange(1, 14, 12, 2).setValues([
     ['Источник', source],
     ['Период', period],
     ['Артикулов в выборке', offers.length],
     ['Реализовано, ₽', Math.round(sumAmount * 100) / 100],
+    ['База комиссии продавца, ₽', Math.round(sumBase * 100) / 100],
     ['Удержано комиссии, ₽', Math.round(sumFee * 100) / 100],
+    ['К начислению, ₽', Math.round(sumTotal * 100) / 100],
+    ['Корректировки начисления, ₽', Math.round(sumAdjustments * 100) / 100],
     ['Ставка по категории, %', listAll],
     ['Комиссия факт, %', factAll],
-    ['СКИДКА (взвешенная), п.п.', deltaAll],
-    ['Скидка (медиана), п.п. / разброс', med + ' / ' + spread]
+    ['Разница, п.п.', deltaAll],
+    ['Медиана / разброс, п.п.', med + ' / ' + spread]
   ]).setFontWeight('bold');
 
   // ---------- параметр в «Параметрах» ----------
   let applied = '';
   const par = ss_().getSheetByName('Параметры');
-  const enough = offers.length >= 10 && sumAmount > 0;
+  const enough = offers.length >= 10 && sumBase > 0 && rowsWithoutBase === 0;
   const sane = deltaAll > 0.05 && deltaAll < 6;
-  if (par && enough && sane) {
+  // Не обновляем B14 без полной сверки суммы начисления с корректировками API.
+  if (par && enough && sane && controlPassed) {
     const col = par.getRange(1, 1, par.getLastRow(), 1).getValues();
     let row = -1;
     for (let i = 0; i < col.length; i++) {
@@ -1502,10 +1531,10 @@ function diagCommission(days) {
       const old = Number(par.getRange(row, 2).getValue());
       par.getRange(row, 2).setValue(deltaAll);
       par.getRange(row, 3).setValue('Замерено ' + Utilities.formatDate(new Date(), tz, 'dd.MM.yyyy HH:mm') +
-        ' по источнику «' + source + '», период ' + period + ': реализовано ' + Math.round(sumAmount) +
+        ' по источнику «' + source + '», период ' + period + ': база продавца ' + Math.round(sumBase) +
         ' ₽, удержано ' + Math.round(sumFee) + ' ₽ = ' + factAll + '% при ставке категории ' + listAll +
-        '%. Было ' + old + ' п.п., стало ' + deltaAll + ' п.п. Медиана по артикулам ' + med +
-        ', разброс ' + spread + ' п.п.');
+        '%. Сверка начисления прошла с учётом корректировок. Было ' + old + ' п.п., стало ' + deltaAll +
+        ' п.п. Медиана по артикулам ' + med + ', разброс ' + spread + ' п.п.');
       applied = old + ' → ' + deltaAll + ' п.п.';
       logMsg_('INFO', 'Комиссия: скидка в «Параметрах» обновлена: ' + applied);
     } else {
@@ -1513,17 +1542,20 @@ function diagCommission(days) {
         'сначала запустите «Синхронизировать данные из Ozon».');
     }
   } else {
-    logMsg_('WARN', 'Комиссия: значение скидки НЕ меняю — артикулов ' + offers.length +
-      ' (нужно минимум 10), скидка ' + deltaAll + ' п.п. (правдоподобно 0,05…6). ' +
-      'Данные на листе «Комиссия факт», решение за вами.');
+    logMsg_('WARN', 'Комиссия: «Параметры» не меняю — артикулов ' + offers.length +
+      ' (нужно ≥10), база продавца ' + Math.round(sumBase) + ' ₽, строк без базы ' + rowsWithoutBase +
+      ', разница ставок ' + deltaAll + ' п.п. (нужна 0,05…6), контроль начисления ' +
+      (controlPassed ? 'пройден' : 'НЕ пройден') + '. B14 оставлен без изменений; данные — на листе «Комиссия факт».');
   }
 
   logMsg_('INFO', 'Комиссия: готово за ' + Math.round((Date.now() - t0) / 1000) + ' с');
   return { ok: true, source: source, period: period, offers: offers.length,
-           amount: Math.round(sumAmount), fee: Math.round(sumFee),
+           amount: Math.round(sumAmount), commissionBase: Math.round(sumBase),
+           fee: Math.round(sumFee), total: Math.round(sumTotal),
            listPercent: listAll, factPercent: factAll,
            discountWeighted: deltaAll, discountMedian: med, spread: spread,
-           checkDiffPercent: checkDiff, applied: applied, note: note };
+           checkDiffPercent: checkDiff, controlPassed: controlPassed,
+           applied: applied, note: note };
 }
 
 // ============================================================

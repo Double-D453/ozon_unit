@@ -76,10 +76,10 @@ const CFG = {
   // метрики delivered_units, returns, cancellations и измерения category1/category2/brand.
   HAS_PREMIUM_PLUS: true,
 
-  // Ozon НЕ отдаёт скидку к комиссии за отсрочку выплаты в ценах: в
-  // /v5/product/info/prices всегда списочная ставка (49,5%). Факт берём из отчёта
-  // о реализации: standard_fee / amount. Значение по умолчанию — до первого замера.
-  COMMISSION_DISCOUNT_DEFAULT: 1.5, // п.п. — отсрочка выплаты 84 дня
+  // Фактическая комиссия из отчёта: standard_fee / (seller_price_per_instance × quantity).
+  // delivery_commission.amount — другая база, в знаменателе ставки не используется.
+  // 1,5 п.п. — существующее значение B14; сырой аудит его не подтверждает и не меняет.
+  COMMISSION_DISCOUNT_DEFAULT: 1.5,
   REALIZATION_DAYS: 14,   // сколько дней отчёта о реализации брать (максимум 31)
   REALIZATION_MAX_DAYS: 31,
 
@@ -92,6 +92,6 @@ const CFG = {
   FACT_COLS: 24,     // колонок на листе «Факт Ozon» (A..X): W/X — комиссия с учётом скидки
   DRR_COLS:  14,     // колонок на листе «Реклама ДРР» (A..N)
   SALES_COLS: 13,    // колонок на листе «Продажи» (A..M): J..M — доставка/возвраты/отмены/% выкупа
-  COMM_COLS: 12,     // колонок на листе «Комиссия факт» (A..L)
+  COMM_COLS: 13,     // колонок на листе «Комиссия факт» (A..M)
   LOG_KEEP:  3000    // сколько строк лога хранить
 };

@@ -9,3 +9,6 @@ node_modules/
 .clasprc.json
 *.log
 .DS_Store
+
+# Экспорты Google Drive для локального аудита
+google_drive/
