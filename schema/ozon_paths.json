@@ -1,0 +1,267 @@
+{
+ "/v1/roles": {
+  "fields": {},
+  "required": [],
+  "note": "без тела (GET/пустое)"
+ },
+ "/v3/product/list": {
+  "fields": {
+   "filter": [
+    "offer_id",
+    "product_id",
+    "skus",
+    "visibility"
+   ],
+   "last_id": null,
+   "limit": null
+  },
+  "required": []
+ },
+ "/v3/product/info/list": {
+  "fields": {
+   "offer_id": [],
+   "product_id": [],
+   "sku": []
+  },
+  "required": []
+ },
+ "/v5/product/info/prices": {
+  "fields": {
+   "cursor": null,
+   "filter": [
+    "offer_id",
+    "product_id",
+    "visibility"
+   ],
+   "limit": null
+  },
+  "required": [
+   "limit",
+   "filter"
+  ]
+ },
+ "/v4/product/info/stocks": {
+  "fields": {
+   "cursor": null,
+   "filter": [
+    "offer_id",
+    "product_id",
+    "visibility",
+    "with_quant"
+   ],
+   "limit": null
+  },
+  "required": [
+   "limit",
+   "filter"
+  ]
+ },
+ "/v1/analytics/data": {
+  "fields": {
+   "date_from": null,
+   "date_to": null,
+   "dimension": [],
+   "filters": [
+    "key",
+    "op",
+    "value"
+   ],
+   "limit": null,
+   "metrics": [],
+   "offset": null,
+   "sort": [
+    "key",
+    "order"
+   ]
+  },
+  "required": [
+   "date_from",
+   "date_to",
+   "dimension",
+   "metrics",
+   "limit"
+  ]
+ },
+ "/v1/actions": {
+  "fields": {},
+  "required": [],
+  "note": "без тела (GET/пустое)"
+ },
+ "/v1/actions/products": {
+  "fields": {
+   "action_id": null,
+   "last_id": null,
+   "limit": null
+  },
+  "required": [
+   "action_id"
+  ]
+ },
+ "/v3/posting/fbo/list": {
+  "fields": {
+   "cursor": null,
+   "filter": [
+    "order_numbers",
+    "posting_numbers",
+    "since",
+    "statuses",
+    "to"
+   ],
+   "limit": null,
+   "sort_dir": null,
+   "translit": null,
+   "with": [
+    "analytics_data",
+    "financial_data",
+    "legal_info"
+   ]
+  },
+  "required": []
+ },
+ "/v3/posting/fbs/list": {
+  "fields": {
+   "dir": null,
+   "filter": [
+    "delivery_method_id",
+    "integration_type_flow",
+    "is_blr_traceable",
+    "is_quantum",
+    "last_changed_status_date",
+    "order_id",
+    "provider_id",
+    "since",
+    "status",
+    "to",
+    "warehouse_id"
+   ],
+   "limit": null,
+   "offset": null,
+   "with": [
+    "analytics_data",
+    "barcodes",
+    "financial_data",
+    "legal_info",
+    "translit"
+   ]
+  },
+  "required": [
+   "filter",
+   "limit",
+   "offset"
+  ]
+ },
+ "/v1/finance/realization/by-day": {
+  "fields": {
+   "day": null,
+   "month": null,
+   "year": null
+  },
+  "required": [
+   "day",
+   "month",
+   "year"
+  ]
+ },
+ "/v2/finance/realization": {
+  "fields": {
+   "month": null,
+   "year": null
+  },
+  "required": [
+   "month",
+   "year"
+  ]
+ },
+ "/v1/finance/realization/posting": {
+  "fields": {
+   "month": null,
+   "year": null
+  },
+  "required": [
+   "month",
+   "year"
+  ]
+ },
+ "/v1/finance/accrual/postings": {
+  "fields": {
+   "posting_numbers": []
+  },
+  "required": [
+   "posting_numbers"
+  ]
+ },
+ "/v1/finance/accrual/types": {
+  "fields": {},
+  "required": [],
+  "note": "без тела (GET/пустое)"
+ },
+ "/v1/finance/accrual/by-day": {
+  "fields": {
+   "date": null,
+   "last_id": null
+  },
+  "required": [
+   "date",
+   "last_id"
+  ]
+ },
+ "/v1/product/import/prices": {
+  "fields": {
+   "prices": [
+    "auto_action_enabled",
+    "auto_add_to_ozon_actions_list_enabled",
+    "currency_code",
+    "declared_price",
+    "manage_elastic_boosting_through_price",
+    "min_price",
+    "min_price_for_auto_actions_enabled",
+    "net_price",
+    "offer_id",
+    "old_price",
+    "price",
+    "price_strategy_enabled",
+    "product_id",
+    "quant_size",
+    "vat"
+   ]
+  },
+  "required": []
+ },
+ "/v1/returns/list": {
+  "fields": {
+   "filter": [
+    "barcode",
+    "compensation_status_id",
+    "logistic_return_date",
+    "offer_id",
+    "order_id",
+    "posting_numbers",
+    "product_name",
+    "return_schema",
+    "storage_tariffication_start_date",
+    "visual_status_change_moment",
+    "visual_status_name",
+    "warehouse_id"
+   ],
+   "last_id": null,
+   "limit": null
+  },
+  "required": [
+   "limit"
+  ]
+ },
+ "/v1/delivery-method/list": {
+  "fields": {
+   "filter": [
+    "provider_id",
+    "status",
+    "warehouse_id"
+   ],
+   "limit": null,
+   "offset": null
+  },
+  "required": [
+   "limit"
+  ]
+ }
+}

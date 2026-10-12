@@ -1,0 +1,6 @@
+# генерируется prepare.sh из ../appsscript/*.gs
+00_Config.js
+01_OzonSeller.js
+02_OzonPerformance.js
+03_Sync.js
+04_Diagnostics.js
