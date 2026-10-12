@@ -1,0 +1,9 @@
+# генерируется tests/prepare.sh из appsscript/*.gs
+tests/00_Config.js
+tests/01_OzonSeller.js
+tests/02_OzonPerformance.js
+tests/03_Sync.js
+tests/04_Diagnostics.js
+node_modules/
+*.log
+.DS_Store

@@ -1,0 +1,67 @@
+name: CI
+
+# Прогоняет оба набора тестов. Ни один не обращается к сети и к Google:
+# всё на моках и на локальной копии официальной схемы Ozon.
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [18.x, 20.x, 22.x]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Node ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      # Синтаксис каркаса Apps Script. Файлы .gs — тот же JavaScript,
+      # но node --check их не понимает по расширению, поэтому копируем в .js.
+      - name: Проверка синтаксиса каркаса (.gs)
+        run: |
+          set -e
+          mkdir -p /tmp/gscheck
+          for f in appsscript/*.gs; do
+            cp "$f" "/tmp/gscheck/$(basename "$f" .gs).js"
+          done
+          for f in /tmp/gscheck/*.js; do
+            node --check "$f"
+            echo "  ✓ $(basename "$f")"
+          done
+
+      - name: Доменное ядро (core/core.test.js)
+        run: node core/core.test.js
+
+      - name: Стенд Apps Script (7 тестов)
+        run: |
+          set -e
+          cd tests
+          ./prepare.sh
+          for t in fact fact6 test_drr guard smoke schema negative comm7; do
+            echo "--- $t ---"
+            TESTFILE=$t.js node all.js
+          done
+
+      # Валидатор должен находить ошибки, а не всегда отвечать «всё хорошо».
+      # Если этот шаг когда-нибудь начнёт падать — значит схема Ozon изменилась
+      # ИЛИ валидатор сломался. И то, и другое важно узнать.
+      # Валидатор должен находить ошибки, а не всегда отвечать «всё хорошо».
+      # Успех печатается строкой «ВСЕ ТЕЛА ЗАПРОСОВ СООТВЕТСТВУЮТ …»,
+      # провал — строкой «ОШИБОК: N» и кодом возврата 1.
+      # Если этот шаг начнёт падать — либо схема Ozon изменилась, либо сломался
+      # сам валидатор. Важно и то, и другое.
+      - name: Контроль валидатора схемы (негативная проверка)
+        run: |
+          cd tests
+          TESTFILE=schema.js node all.js | tee /tmp/schema.log
+          grep -q "СООТВЕТСТВУЮТ ОФИЦИАЛЬНОЙ СХЕМЕ" /tmp/schema.log || {
+            echo "Валидатор не подтвердил соответствие схеме — см. вывод выше"; exit 1; }
+          ! grep -q "ОШИБОК:" /tmp/schema.log || {
+            echo "Валидатор сообщает об ошибках тел запросов"; exit 1; }
