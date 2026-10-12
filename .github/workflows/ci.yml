@@ -4,7 +4,7 @@ name: CI
 # всё на моках и на локальной копии официальной схемы Ozon.
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, 'arena/**' ]
   pull_request:
   workflow_dispatch:
 
@@ -43,7 +43,7 @@ jobs:
         run: |
           set -e
           cd tests
-          ./prepare.sh
+          sh prepare.sh
           for t in fact fact6 test_drr guard smoke schema negative comm7; do
             echo "--- $t ---"
             TESTFILE=$t.js node all.js
@@ -65,3 +65,32 @@ jobs:
             echo "Валидатор не подтвердил соответствие схеме — см. вывод выше"; exit 1; }
           ! grep -q "ОШИБОК:" /tmp/schema.log || {
             echo "Валидатор сообщает об ошибках тел запросов"; exit 1; }
+
+  deploy-appsscript:
+    # Публикуем только после push, но не из pull_request.
+    if: github.event_name == 'push'
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+
+      - name: Подготовить clasp
+        working-directory: appsscript
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+          GAS_SCRIPT_ID: ${{ secrets.GAS_SCRIPT_ID }}
+        run: |
+          set -euo pipefail
+          : "${CLASPRC_JSON:?Не задан секрет CLASPRC_JSON}"
+          : "${GAS_SCRIPT_ID:?Не задан секрет GAS_SCRIPT_ID}"
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+          node -e 'JSON.parse(require("fs").readFileSync(process.env.HOME + "/.clasprc.json", "utf8"));'
+          node -e 'require("fs").writeFileSync(".clasp.json", JSON.stringify({scriptId: process.env.GAS_SCRIPT_ID, rootDir: "."}, null, 2) + "\n");'
+
+      - name: Выгрузить Apps Script
+        working-directory: appsscript
+        run: npx --yes @google/clasp@2.5.0 push --force

@@ -5,5 +5,7 @@ tests/02_OzonPerformance.js
 tests/03_Sync.js
 tests/04_Diagnostics.js
 node_modules/
+.clasp.json
+.clasprc.json
 *.log
 .DS_Store
