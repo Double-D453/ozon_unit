@@ -266,3 +266,134 @@ function previewExport() {
   const n = sh.getLastRow() - 1;
   logMsg_('INFO', 'previewExport: к выгрузке ' + n + ' строк. Отправка в Ozon пока отключена (безопасный режим).');
 }
+
+/**
+ * Сырой аудит полей отчёта о реализации — только для выяснения семантики комиссии.
+ * Читает Seller API за последние N дней и сохраняет несколько показательных товаров
+ * в отдельную вкладку «Аудит комиссии API». Не меняет «Комиссия факт» и «Параметры»;
+ * в частности, не записывает B14.
+ */
+function diagCommissionSourceRaw(days) {
+  const t0 = Date.now();
+  const tz = Session.getScriptTimeZone();
+  const wantDays = Math.min(Math.max(Number(days) || CFG.REALIZATION_DAYS, 1), CFG.REALIZATION_MAX_DAYS);
+  const targets = {};
+  const addTarget = function (offer, reason) {
+    const id = String(offer || '').trim();
+    if (id && !targets[id]) targets[id] = reason;
+  };
+
+  // Всегда берём товар, на котором заметили >100%, и добавляем четыре наибольших
+  // процента из текущего листа плюс товар с медианным результатом для сравнения.
+  addTarget('Каталог-Мультишпон', 'контрольный пример >100%');
+  const comm = ss_().getSheetByName(CFG.SHEETS.COMM);
+  if (comm && comm.getLastRow() > 1) {
+    const values = comm.getRange(2, 1, comm.getLastRow() - 1, 9).getValues();
+    const candidates = values.filter(function (r) { return String(r[0] || '').trim(); });
+    const byFact = candidates.slice().sort(function (a, b) {
+      return (Number(b[8]) || 0) - (Number(a[8]) || 0);
+    });
+    byFact.slice(0, 4).forEach(function (r) { addTarget(r[0], 'один из максимальных процентов в «Комиссия факт»'); });
+    const byMedian = candidates.slice().sort(function (a, b) {
+      return (Number(a[8]) || 0) - (Number(b[8]) || 0);
+    });
+    if (byMedian.length) addTarget(byMedian[Math.floor(byMedian.length / 2)][0], 'медианный пример');
+  }
+
+  const headers = [
+    'Дата API', 'Причина выборки', 'Offer id', 'SKU', 'Наименование', 'rowNumber',
+    'commission_ratio (raw)', 'seller_price_per_instance',
+    'delivery_commission.amount', 'delivery_commission.standard_fee',
+    'delivery_commission.commission', 'delivery_commission.total',
+    'delivery_commission.quantity', 'delivery_commission.price_per_instance',
+    'delivery_commission.bonus', 'delivery_commission.bank_coinvestment',
+    'delivery_commission.stars', 'delivery_commission.pick_up_point_coinvestment',
+    'delivery_commission.compensation',
+    'return_commission.amount', 'return_commission.standard_fee',
+    'return_commission.commission', 'return_commission.total',
+    'return_commission.quantity', 'return_commission.price_per_instance',
+    'return_commission.bonus', 'return_commission.bank_coinvestment',
+    'return_commission.stars', 'return_commission.pick_up_point_coinvestment',
+    'return_commission.compensation',
+    'fee / amount, % (текущий расчёт)',
+    'fee / (fee + total), % (сверка)',
+    'fee / (seller_price_per_instance × quantity), % (сверка)'
+  ];
+  const output = [headers];
+  const errors = [];
+  let requestsOk = 0;
+
+  function value(obj, key) {
+    return obj && obj[key] !== undefined && obj[key] !== null ? obj[key] : '';
+  }
+
+  for (let i = 1; i <= wantDays; i++) {
+    const d = new Date(Date.now() - i * 86400000);
+    const year = Number(Utilities.formatDate(d, tz, 'yyyy'));
+    const month = Number(Utilities.formatDate(d, tz, 'MM'));
+    const day = Number(Utilities.formatDate(d, tz, 'dd'));
+    const dateLabel = Utilities.formatDate(d, tz, 'yyyy-MM-dd');
+    let rows;
+    try {
+      rows = realizationByDay_(year, month, day);
+      requestsOk++;
+    } catch (e) {
+      errors.push(dateLabel + ': ' + String(e.message).slice(0, 180));
+      if (errors.length >= 2) break;
+      continue;
+    }
+
+    rows.forEach(function (r) {
+      const item = r.item || {};
+      const offer = String(item.offer_id || '').trim();
+      if (!targets[offer]) return;
+      const dc = r.delivery_commission || {};
+      const rc = r.return_commission || {};
+      const fee = Number(dc.standard_fee) || Number(dc.commission) || 0;
+      const amount = Number(dc.amount) || 0;
+      const total = Number(dc.total) || 0;
+      const quantity = Number(dc.quantity) || 0;
+      const sellerPrice = Number(r.seller_price_per_instance) || 0;
+      const feeOverBase = fee + total ? Math.round(fee / (fee + total) * 10000) / 100 : '';
+      const sellerBase = sellerPrice * quantity;
+      output.push([
+        dateLabel, targets[offer], offer, value(item, 'sku'), value(item, 'name'), value(r, 'rowNumber'),
+        value(r, 'commission_ratio'), value(r, 'seller_price_per_instance'),
+        value(dc, 'amount'), value(dc, 'standard_fee'), value(dc, 'commission'), value(dc, 'total'),
+        value(dc, 'quantity'), value(dc, 'price_per_instance'), value(dc, 'bonus'),
+        value(dc, 'bank_coinvestment'), value(dc, 'stars'), value(dc, 'pick_up_point_coinvestment'),
+        value(dc, 'compensation'),
+        value(rc, 'amount'), value(rc, 'standard_fee'), value(rc, 'commission'), value(rc, 'total'),
+        value(rc, 'quantity'), value(rc, 'price_per_instance'), value(rc, 'bonus'),
+        value(rc, 'bank_coinvestment'), value(rc, 'stars'), value(rc, 'pick_up_point_coinvestment'),
+        value(rc, 'compensation'),
+        amount ? Math.round(fee / amount * 10000) / 100 : '', feeOverBase,
+        sellerBase ? Math.round(fee / sellerBase * 10000) / 100 : ''
+      ]);
+    });
+    Utilities.sleep(CFG.PAUSE_MS);
+  }
+
+  const sheetName = 'Аудит комиссии API';
+  const ss = ss_();
+  const sh = ss.getSheetByName(sheetName) || ss.insertSheet(sheetName);
+  sh.clearContents();
+  sh.getRange(1, 1, output.length, headers.length).setValues(output);
+  sh.getRange(1, 1, 1, headers.length).setFontWeight('bold');
+  sh.setFrozenRows(1);
+
+  errors.forEach(function (e) { logMsg_('WARN', 'Аудит комиссии API: ' + e); });
+  logMsg_('INFO', 'Аудит комиссии API: строк ' + (output.length - 1) + ', товаров ' +
+    Object.keys(targets).length + ', успешных запросов ' + requestsOk + ' из ' + wantDays +
+    '. B14 и лист «Комиссия факт» не менялись.');
+  return {
+    ok: output.length > 1,
+    sheet: sheetName,
+    rows: output.length - 1,
+    targets: Object.keys(targets),
+    requestsOk: requestsOk,
+    requestedDays: wantDays,
+    errors: errors.length,
+    elapsedSeconds: Math.round((Date.now() - t0) / 1000)
+  };
+}

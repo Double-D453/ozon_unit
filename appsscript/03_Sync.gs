@@ -1570,6 +1570,7 @@ function onOpen() {
     .addItem('Обновить инструкцию в таблице', 'menuRefreshInstruction')
     .addItem('Проверить подключение', 'menuTest')
     .addItem('Проверить комиссию по отчёту о реализации', 'menuDiagCommission')
+    .addItem('Снять сырые поля комиссии (без изменения B14)', 'menuDiagCommissionSourceRaw')
     .addItem('Проверить права API-ключа', 'menuDiagRoles')
     .addItem('Сверить цены (диагностика)', 'menuDiagPrices')
     .addItem('Диагностика ДРР (сырой ответ)', 'menuDiagDrr')
@@ -1595,8 +1596,10 @@ function menuAddMissing()  {
 }
 function menuDiagPrices()  { ui_('Сверка цен', diagPriceCompare); }
 function menuDiagCommission() { ui_('Комиссия: факт против списочной ставки', diagCommissionDefault); }
+function menuDiagCommissionSourceRaw() { ui_('Аудит исходных полей комиссии', diagCommissionSourceRawDefault); }
 function menuDiagRoles() { ui_('Права API-ключа', diagRoles); }
 function diagCommissionDefault() { return diagCommission(CFG.REALIZATION_DAYS); }
+function diagCommissionSourceRawDefault() { return diagCommissionSourceRaw(CFG.REALIZATION_DAYS); }
 function menuDiagDrr()     { ui_('Диагностика ДРР', diagDrrRaw); }
 function menuRefreshInstruction() { ui_('Инструкция', refreshInstruction); }
 
