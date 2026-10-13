@@ -563,7 +563,8 @@ function calculateUnitEconomics() {
       const sku = String(nr[1] === undefined || nr[1] === null ? '' : nr[1]).trim();
       const name = String(nr[2] === undefined || nr[2] === null ? '' : nr[2]);
       const costPerUnit = calcNum_(nr[5]); // F
-      const multiplicity = calcNum_(nr[6]); // G
+      const multRaw = calcNum_(nr[6]);     // G
+      const multiplicity = multRaw !== null ? Math.round(multRaw * 1e6) / 1e6 : null;
       const packagingRaw = nr[7];          // H
       const packaging = calcNum_(packagingRaw) || 0;
       const nomStockFbo = calcNum_(nr[11]); // L
@@ -858,22 +859,9 @@ function calculateUnitEconomics() {
       ]);
     });
 
-    // --- 7. Записываем лист «Расчёт» ---
-    const calcSh = sheet_(CFG.SHEETS.CALC, calcHeaders_());
-    const needRows = Math.max(calcRows.length + 1, 2);
-    if (calcSh.getMaxRows() < needRows) {
-      calcSh.insertRowsAfter(calcSh.getMaxRows(), needRows - calcSh.getMaxRows());
-    }
-    calcSh.getRange(2, 1, Math.max(calcSh.getMaxRows() - 1, 1), CFG.CALC_COLS).clearContent();
-    if (calcRows.length) {
-      calcSh.getRange(2, 1, calcRows.length, CFG.CALC_COLS).setValues(calcRows);
-      calcSh.getRange(2, 6, calcRows.length, 6).setNumberFormat('#,##0.00');
-      calcSh.getRange(2, 14, calcRows.length, 4).setNumberFormat('#,##0.00');
-      calcSh.getRange(2, 21, calcRows.length, 18).setNumberFormat('#,##0.00');
-    }
-
-    // --- 8. Проверяем каждую текущую строку листа «Акции» ---
-    let actChecked = 0, actAllowed = 0, actBlocked = 0;
+    // --- 7. Проверяем каждую текущую строку листа «Акции» ---
+    let actChecked = 0, actAllowed = 0, actBlocked = 0, actBelowFloor = 0;
+    let updatedActRows = [];
     if (actSh && actRows.length) {
       const aHeaders = actHeaders_();
       if (actSh.getMaxColumns() < aHeaders.length && typeof actSh.insertColumnsAfter === 'function') {
@@ -881,7 +869,7 @@ function calculateUnitEconomics() {
       }
       actSh.getRange(1, 1, 1, aHeaders.length).setValues([aHeaders]).setFontWeight('bold');
 
-      const updatedActRows = actRows.map(function (r) {
+      updatedActRows = actRows.map(function (r) {
         const base = [];
         for (let i = 0; i < CFG.ACT_SYNC_COLS; i++) {
           base.push(r[i] !== undefined && r[i] !== null ? r[i] : '');
@@ -893,24 +881,21 @@ function calculateUnitEconomics() {
         const floorRounded = ctx ? ctx.actionFloorRounded : null;
         const chk = checkSheetActionRow_(floorRounded, maxActPrice, actPrice, ctx);
         actChecked++;
-        if (chk.allowed) actAllowed++;
-        else actBlocked++;
+        if (chk.allowed) {
+          actAllowed++;
+          if (String(chk.status || '').indexOf('ниже нашего пола') !== -1) actBelowFloor++;
+        } else {
+          actBlocked++;
+        }
         base.push(chk.floorRub, chk.headroomRub, chk.actionMarkupPct, chk.status);
         return base;
       });
       actSh.getRange(2, 1, updatedActRows.length, aHeaders.length).setValues(updatedActRows);
+      styleActionsSheet_(actSh, updatedActRows);
     }
 
     const today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'dd.MM.yyyy HH:mm');
-    logMsg_('INFO', 'Расчёт Э2/Э3 завершён: всего SKU ' + calcRows.length +
-      ', рассчитано ' + calculated +
-      ', пропущено без СС/кратности ' + skippedNoCost +
-      ', заблокировано (выкуп 0%) ' + blockedZeroBuyout +
-      '. Комиссия: из «Комиссия факт» ' + commFromFact + ', из «Факт Ozon» ' + commFromFallback +
-      '. Акции: строк проверено ' + actChecked + ' (проходят ' + actAllowed + ', конфликт/блок ' + actBlocked + ').');
-
-    recalc_();
-    return {
+    const summary = {
       ok: true,
       total: calcRows.length,
       calculated: calculated,
@@ -926,11 +911,659 @@ function calculateUnitEconomics() {
       actionConflicts: actionConflicts,
       actionsChecked: actChecked,
       actionsAllowed: actAllowed,
+      actionsBelowFloor: actBelowFloor,
       actionsBlocked: actBlocked,
       updatedAt: today
     };
+
+    // --- 8. Записываем лист «Расчёт» (KPI-шапка в строках 1–3, заголовки в строке 4, данные с 5-й) ---
+    const hdrRow = CFG.CALC_HEADER_ROW || 4;
+    const dataStartRow = CFG.CALC_DATA_START_ROW || 5;
+    let calcSh = ss.getSheetByName(CFG.SHEETS.CALC);
+    if (!calcSh) calcSh = ss.insertSheet(CFG.SHEETS.CALC);
+    if (calcSh.getMaxColumns() < CFG.CALC_COLS && typeof calcSh.insertColumnsAfter === 'function') {
+      calcSh.insertColumnsAfter(calcSh.getMaxColumns(), CFG.CALC_COLS - calcSh.getMaxColumns());
+    }
+    const needRows = Math.max(calcRows.length + dataStartRow - 1, dataStartRow);
+    if (calcSh.getMaxRows() < needRows) {
+      calcSh.insertRowsAfter(calcSh.getMaxRows(), needRows - calcSh.getMaxRows());
+    }
+    calcSh.getRange(1, 1, Math.max(calcSh.getMaxRows(), needRows), CFG.CALC_COLS).clearContent();
+
+    const bannerRows = buildCalcKpiBanner_(summary, params);
+    calcSh.getRange(1, 1, 3, CFG.CALC_COLS).setValues(bannerRows);
+    calcSh.getRange(hdrRow, 1, 1, CFG.CALC_COLS).setValues([calcHeaders_()]);
+    if (calcRows.length) {
+      calcSh.getRange(dataStartRow, 1, calcRows.length, CFG.CALC_COLS).setValues(calcRows);
+    }
+
+    styleCalcSheet_(calcSh, calcRows, summary, params);
+    styleCalcSettingsSheet_(ss.getSheetByName(CFG.SHEETS.CALC_SETTINGS));
+    organizeWorkbookTabs_(ss);
+
+    logMsg_('INFO', 'Расчёт Э2/Э3 завершён: всего SKU ' + calcRows.length +
+      ', рассчитано ' + calculated +
+      ', пропущено без СС/кратности ' + skippedNoCost +
+      ', заблокировано (выкуп 0%) ' + blockedZeroBuyout +
+      '. Комиссия: из «Комиссия факт» ' + commFromFact + ', из «Факт Ozon» ' + commFromFallback +
+      '. Акции: строк проверено ' + actChecked + ' (проходят ' + actAllowed + ', конфликт/блок ' + actBlocked + ').');
+
+    recalc_();
+    return summary;
   } catch (e) {
     logMsg_('ERROR', 'calculateUnitEconomics: ' + e.message);
     throw e;
   }
+}
+
+// =====================================================================
+// UX / UI ОФОРМЛЕНИЕ РАБОЧЕЙ ТАБЛИЦЫ
+// =====================================================================
+
+/**
+ * Формирует 3 строки верхней закреплённой KPI-панели на листе «Расчёт» (40 колонок).
+ * ВАЖНО: все подписи и значения размещаются в 15 главных колонках, которые остаются
+ * видимыми при свёрнутых группах [+]: A(0), B(1), C(2), E(4), I(8), O(14), Q(16),
+ * U(20), Y(24), AF(31), AG(32), AI(34), AJ(35), AM(38), AN(39).
+ */
+function buildCalcKpiBanner_(summary, params) {
+  const r1 = new Array(CFG.CALC_COLS).fill('');
+  const r2 = new Array(CFG.CALC_COLS).fill('');
+  const r3 = new Array(CFG.CALC_COLS).fill('');
+
+  const okHealthy = Math.max(0, (summary.calculated || 0) - (summary.belowTargetPrice || 0));
+  const drrPct = Math.round((params.drr || 0) * 10000) / 100;
+  const defBuyoutPct = Math.round((params.buyoutDefault || 0) * 10000) / 100;
+  const minMpPct = Math.round((params.minMarkup || 0) * 10000) / 100;
+  const tgtMpPct = Math.round((params.targetMarkup || 0) * 10000) / 100;
+
+  // Строка 1 — заголовки KPI-плашек
+  r1[0]  = '📊 ЮНИТ-ЭКОНОМИКА И ЦЕНЫ (Э2/Э3)';
+  r1[1]  = 'Всего SKU';
+  r1[2]  = 'Покрытие базы (в расчёте / без СС / блок 0%)';
+  r1[4]  = 'Схема';
+  r1[8]  = 'Выкуп (Продажи / B8)';
+  r1[14] = 'База ДРР / Выкуп';
+  r1[16] = 'Комиссия (Факт / Ozon)';
+  r1[20] = 'В норме (≥ цели)';
+  r1[24] = 'Ниже мин. наценки';
+  r1[31] = 'Наценка цель / мин.';
+  r1[32] = 'Ниже целевой цены';
+  r1[34] = 'Акций проверено';
+  r1[35] = 'Акции ОК / Ниже пола';
+  r1[38] = 'Конфликт лимита Ozon';
+  r1[39] = 'Обновлено';
+
+  // Строка 2 — значения KPI-плашек
+  r2[0]  = 'Сводка по магазину';
+  r2[1]  = summary.total || 0;
+  r2[2]  = 'Рассчитано: ' + (summary.calculated || 0) +
+           '  |  Без СС: ' + (summary.skippedNoCost || 0) +
+           '  |  Блок (0%): ' + (summary.blockedZeroBuyout || 0);
+  r2[4]  = String(params.scheme || 'Авто');
+  r2[8]  = (summary.buyoutFromSales || 0) + ' / ' + (summary.buyoutFallback || 0);
+  r2[14] = 'ДРР ' + drrPct + '% | Выкуп ' + defBuyoutPct + '%';
+  r2[16] = (summary.commFromFact || 0) + ' / ' + (summary.commFromFallback || 0);
+  r2[20] = okHealthy;
+  r2[24] = summary.belowMinMarkup || 0;
+  r2[31] = tgtMpPct + '% / ' + minMpPct + '% (шаг ' + (params.roundStep || 1) + ' ₽)';
+  r2[32] = summary.belowTargetPrice || 0;
+  r2[34] = summary.actionsChecked || 0;
+  r2[35] = (summary.actionsAllowed || 0) + ' ОК / ' + (summary.actionsBelowFloor || 0) + ' ниже пола';
+  r2[38] = summary.actionsBlocked || 0;
+  r2[39] = summary.updatedAt || '';
+
+  // Строка 3 — подсказка по навигации и легенда светофора
+  r3[0]  = '💡 Раскройте [+] над столбцами для деталей затрат и налогов';
+  r3[2]  = 'Фильтр [▼] в строке 4 позволяет отобрать убыточные SKU или конфликты акций';
+  r3[20] = '🟢 Зелёный: наценка ≥ цели, акция ОК';
+  r3[24] = '🟡 Жёлтый: ниже цели или ниже нашего пола';
+  r3[38] = '🔴 Красный: убыток (<0%) или пол > лимита Ozon';
+  r3[39] = '⚪ Серый: нет СС/кратности в 1С';
+
+  return [r1, r2, r3];
+}
+
+/**
+ * Сбрасывает и заново включает автофильтр на заданном диапазоне листа.
+ */
+function resetSheetFilter_(sh, headerRow, totalRows, numCols) {
+  if (!sh) return;
+  try {
+    const existing = typeof sh.getFilter === 'function' ? sh.getFilter() : null;
+    if (existing && typeof existing.remove === 'function') existing.remove();
+    if (totalRows >= 1 && typeof sh.getRange === 'function') {
+      const rng = sh.getRange(headerRow, 1, totalRows, numCols);
+      if (rng && typeof rng.createFilter === 'function') rng.createFilter();
+    }
+  } catch (e) {}
+}
+
+/**
+ * Настраивает сворачиваемые группы колонок [+/-] на листе «Расчёт».
+ * В свёрнутом состоянии остаются 15 главных управленческих колонок на один экран.
+ */
+function setupCalcColumnGroups_(sh) {
+  if (!sh || typeof sh.getRange !== 'function') return;
+  try {
+    if (typeof sh.expandAllColumnGroups === 'function') sh.expandAllColumnGroups();
+    const fullRow = sh.getRange(1, 1, 1, CFG.CALC_COLS);
+    if (fullRow && typeof fullRow.shiftColumnGroupDepth === 'function') {
+      for (let d = 0; d < 4; d++) {
+        try { fullRow.shiftColumnGroupDepth(-1); } catch (e0) { break; }
+      }
+      const groups = CFG.CALC_COLUMN_GROUPS || [];
+      groups.forEach(function (grp) {
+        try {
+          sh.getRange(1, grp[0], 1, grp[1]).shiftColumnGroupDepth(1);
+        } catch (eg) {}
+      });
+      if (typeof sh.collapseAllColumnGroups === 'function') sh.collapseAllColumnGroups();
+      if (typeof sh.setColumnGroupControlPosition === 'function' &&
+          typeof SpreadsheetApp !== 'undefined' &&
+          SpreadsheetApp.GroupControlTogglePosition) {
+        sh.setColumnGroupControlPosition(SpreadsheetApp.GroupControlTogglePosition.AFTER);
+      }
+    }
+  } catch (e) {}
+}
+
+/**
+ * Пакетное UX/UI оформление листа «Расчёт»:
+ * - KPI-шапка (строки 1–3) + легенда светофора;
+ * - цветовые блоки заголовков (строка 4);
+ * - светофор ячеек по всем строкам товаров (с 5-й строки);
+ * - форматы чисел (без экспоненты в SKU, целые рубли в ценах, проценты);
+ * - закрепление 4 строк и 3 колонок (Offer id, SKU, Наименование);
+ * - группировка второстепенных колонок [+/-] и автофильтр.
+ */
+function styleCalcSheet_(sh, calcRows, summary, params) {
+  if (!sh) return;
+  const hdrRow = CFG.CALC_HEADER_ROW || 4;
+  const dataStartRow = CFG.CALC_DATA_START_ROW || 5;
+  const cols = CFG.CALC_COLS;
+
+  // 1. Закрепление шапки (4 строки) и ключевых колонок товара (A..C)
+  try {
+    sh.setFrozenRows(hdrRow);
+    if (typeof sh.setFrozenColumns === 'function') sh.setFrozenColumns(3);
+  } catch (e) {}
+
+  // 2. Оформление KPI-панели (строки 1–3) и шапки таблицы (строка 4)
+  const topBgs = [
+    new Array(cols).fill('#f1f3f4'),
+    new Array(cols).fill('#ffffff'),
+    new Array(cols).fill('#eef3fc'),
+    new Array(cols).fill('#202124')
+  ];
+  const topFcs = [
+    new Array(cols).fill('#5f6368'),
+    new Array(cols).fill('#202124'),
+    new Array(cols).fill('#3c4043'),
+    new Array(cols).fill('#ffffff')
+  ];
+  const topFws = [
+    new Array(cols).fill('bold'),
+    new Array(cols).fill('bold'),
+    new Array(cols).fill('normal'),
+    new Array(cols).fill('bold')
+  ];
+
+  // Акценты KPI-плашек в строке 1–2
+  topBgs[0][0] = '#1e8e3e'; topFcs[0][0] = '#ffffff';
+  topBgs[1][0] = '#e6f4ea'; topFcs[1][0] = '#137333';
+  topBgs[1][2] = '#f8f9fa'; topFcs[1][2] = '#202124';
+  topBgs[1][20] = '#e6f4ea'; topFcs[1][20] = '#137333';
+  topBgs[1][24] = (summary && summary.belowMinMarkup > 0) ? '#fce8e6' : '#e6f4ea';
+  topFcs[1][24] = (summary && summary.belowMinMarkup > 0) ? '#c5221f' : '#137333';
+  topBgs[1][32] = (summary && summary.belowTargetPrice > 0) ? '#fef7e0' : '#e6f4ea';
+  topFcs[1][32] = (summary && summary.belowTargetPrice > 0) ? '#b06000' : '#137333';
+  topBgs[1][35] = (summary && summary.actionsBelowFloor > 0) ? '#fef7e0' : '#e6f4ea';
+  topFcs[1][35] = (summary && summary.actionsBelowFloor > 0) ? '#b06000' : '#137333';
+  topBgs[1][38] = (summary && summary.actionsBlocked > 0) ? '#fce8e6' : '#e6f4ea';
+  topFcs[1][38] = (summary && summary.actionsBlocked > 0) ? '#c5221f' : '#137333';
+
+  // Цветовое кодирование 6 смысловых блоков в строке 4 (шапка таблицы)
+  const primaryCols = { 0:1, 1:1, 2:1, 4:1, 8:1, 14:1, 16:1, 20:1, 24:1, 31:1, 32:1, 34:1, 35:1, 38:1, 39:1 };
+  for (let c = 0; c < cols; c++) {
+    const isPrim = Boolean(primaryCols[c]);
+    if (c <= 4) {
+      topBgs[3][c] = isPrim ? '#202124' : '#3c4043'; // Блок 1: Товар и схема
+    } else if (c <= 19) {
+      topBgs[3][c] = isPrim ? '#1f4e79' : '#2e6da4'; // Блок 2: Затраты, логистика, комиссия
+    } else if (c <= 27) {
+      topBgs[3][c] = isPrim ? '#0e6251' : '#148f77'; // Блок 3: Текущие цены и факт. наценка (Э2)
+    } else if (c <= 34) {
+      topBgs[3][c] = isPrim ? '#4a235a' : '#6c3483'; // Блок 4: Каскад и расчётные цены (Э3)
+    } else if (c <= 37) {
+      topBgs[3][c] = isPrim ? '#7e5109' : '#9c640c'; // Блок 5: Прибыль и налоги ОСНО
+    } else {
+      topBgs[3][c] = '#263238';                      // Блок 6: Контроль акций и статус
+    }
+  }
+
+  const topRange = sh.getRange(1, 1, hdrRow, cols);
+  if (typeof topRange.setBackgrounds === 'function') topRange.setBackgrounds(topBgs);
+  if (typeof topRange.setFontColors === 'function') topRange.setFontColors(topFcs);
+  if (typeof topRange.setFontWeights === 'function') topRange.setFontWeights(topFws);
+  sh.getRange(hdrRow, 1, 1, cols).setWrap(true);
+
+  try {
+    if (typeof sh.setRowHeight === 'function') {
+      sh.setRowHeight(1, 22);
+      sh.setRowHeight(2, 26);
+      sh.setRowHeight(3, 22);
+      sh.setRowHeight(4, 38);
+    }
+  } catch (e) {}
+
+  // 3. Пакетный светофор и числовые форматы для строк данных
+  if (calcRows && calcRows.length) {
+    const n = calcRows.length;
+    const bgs = new Array(n);
+    const fcs = new Array(n);
+    const fws = new Array(n);
+
+    // Шаблон числовых форматов на 1 строку из 40 колонок
+    const fmtRow = [
+      '@',        // 1 A: Offer id
+      '0',        // 2 B: SKU (без экспоненты!)
+      '@',        // 3 C: Наименование
+      '0',        // 4 D: Категория
+      '@',        // 5 E: Схема
+      '#,##0.00', // 6 F: СС за ед.
+      '0.###',    // 7 G: Кратность
+      '#,##0.00', // 8 H: Упаковка
+      '#,##0.00', // 9 I: Ленд-кост
+      '#,##0.00', // 10 J: Логистика прямая
+      '#,##0.00', // 11 K: Тариф возврата
+      '0.00"%"',  // 12 L: Выкуп, %
+      '@',        // 13 M: Источник выкупа
+      '#,##0.00', // 14 N: Возвраты на 1 выкуп., ₽
+      '#,##0.00', // 15 O: Логистика с возвратами, ₽
+      '#,##0.00', // 16 P: Эквайринг, ₽
+      '0.00"%"',  // 17 Q: Комиссия, %
+      '@',        // 18 R: Источник комиссии
+      '0.00"%"',  // 19 S: ДРР, %
+      '0.00"%"',  // 20 T: Запас цены, %
+      '#,##0',    // 21 U: Цена с акцией, ₽
+      '#,##0',    // 22 V: Цена без акции, ₽
+      '#,##0',    // 23 W: Зачёркнутая цена, ₽
+      '#,##0',    // 24 X: min_price Ozon, ₽
+      '0.00"%"',  // 25 Y: Наценка по цене с акцией, %
+      '0.00"%"',  // 26 Z: Наценка по цене без акции, %
+      '0.00"%"',  // 27 AA: Наценка по зачёркнутой цене, %
+      '0.00"%"',  // 28 AB: Наценка по min_price, %
+      '0.00"%"',  // 29 AC: Мин. наценка, %
+      '0.00"%"',  // 30 AD: Целевая наценка, %
+      '@',        // 31 AE: Источник наценки
+      '#,##0',    // 32 AF: Безубыточность, ₽
+      '#,##0',    // 33 AG: Ограничение для акций (наш пол), ₽
+      '#,##0.00', // 34 AH: Целевая цена (до окр.), ₽
+      '#,##0',    // 35 AI: Целевая цена, ₽
+      '#,##0.00', // 36 AJ: Прибыль до налогов, ₽
+      '#,##0.00', // 37 AK: НДС в цене, ₽
+      '#,##0.00', // 38 AL: Налог на прибыль, ₽
+      '@',        // 39 AM: Статус акций
+      '@'         // 40 AN: Статус / Предупреждения
+    ];
+    const fmts = new Array(n);
+
+    for (let i = 0; i < n; i++) {
+      const r = calcRows[i];
+      const statusText = String(r[39] || '');
+      const actText = String(r[38] || '');
+      const isSkipped = statusText.indexOf('ПРОПУСК:') === 0;
+      const isBlocked = statusText.indexOf('БЛОК ЦЕНЫ:') === 0;
+
+      const zebra = (i % 2 === 1) ? '#f8f9fa' : '#ffffff';
+      const rowBg = new Array(cols).fill(isSkipped ? '#f4f5f7' : zebra);
+      const rowFc = new Array(cols).fill(isSkipped ? '#80868b' : '#202124');
+      const rowFw = new Array(cols).fill('normal');
+      fmts[i] = fmtRow;
+
+      if (isSkipped) {
+        rowBg[39] = '#e8eaed';
+        rowFc[39] = '#5f6368';
+      } else {
+        // Выделяем ключевые расчётные колонки (Ленд-кост, Логистика с возвр., Наш пол, Целевая цена)
+        rowFw[0]  = 'bold';
+        rowFw[8]  = 'bold';
+        rowFw[14] = 'bold';
+        rowBg[32] = '#f3e8fd'; rowFc[32] = '#4a235a'; rowFw[32] = 'bold'; // AG: Наш пол акций
+        rowBg[34] = '#ede7f6'; rowFc[34] = '#311b92'; rowFw[34] = 'bold'; // AI: Целевая цена
+
+        // Схема FBO / FBS
+        if (r[4] === 'FBO') {
+          rowBg[4] = '#e8f0fe'; rowFc[4] = '#1967d2'; rowFw[4] = 'bold';
+        } else if (r[4] === 'FBS') {
+          rowBg[4] = '#fef7e0'; rowFc[4] = '#b06000'; rowFw[4] = 'bold';
+        }
+
+        if (isBlocked) {
+          rowBg[11] = '#fce8e6'; rowFc[11] = '#c5221f'; rowFw[11] = 'bold';
+          rowBg[31] = '#fce8e6'; rowBg[32] = '#fce8e6'; rowBg[34] = '#fce8e6';
+          rowBg[39] = '#fce8e6'; rowFc[39] = '#c5221f'; rowFw[39] = 'bold';
+        } else {
+          const curPrice = calcNum_(r[20]);
+          const mCur = calcNum_(r[24]);
+          const minMp = calcNum_(r[28]);
+          const tgtMp = calcNum_(r[29]);
+          const floorP = calcNum_(r[32]);
+          const targetP = calcNum_(r[34]);
+          const profit = calcNum_(r[35]);
+
+          // Светофор для текущей цены (U) относительно пола и целевой цены
+          if (curPrice !== null && floorP !== null && curPrice < floorP) {
+            rowBg[20] = '#fce8e6'; rowFc[20] = '#c5221f'; rowFw[20] = 'bold';
+          } else if (curPrice !== null && targetP !== null && curPrice < targetP) {
+            rowBg[20] = '#fef7e0'; rowFc[20] = '#b06000'; rowFw[20] = 'bold';
+          } else if (curPrice !== null) {
+            rowBg[20] = '#e6f4ea'; rowFc[20] = '#137333'; rowFw[20] = 'bold';
+          }
+
+          // Светофор для фактической наценки по цене с акцией (Y)
+          if (mCur !== null) {
+            rowFw[24] = 'bold';
+            if (mCur < 0) {
+              rowBg[24] = '#fce8e6'; rowFc[24] = '#c5221f';
+            } else if (minMp !== null && mCur < minMp) {
+              rowBg[24] = '#fce8e6'; rowFc[24] = '#c5221f';
+            } else if (tgtMp !== null && mCur < tgtMp) {
+              rowBg[24] = '#fef7e0'; rowFc[24] = '#b06000';
+            } else {
+              rowBg[24] = '#e6f4ea'; rowFc[24] = '#137333';
+            }
+          }
+
+          // Светофор для прибыли до налогов (AJ)
+          if (profit !== null) {
+            rowFw[35] = 'bold';
+            if (profit < 0) {
+              rowBg[35] = '#fce8e6'; rowFc[35] = '#c5221f';
+            } else if (profit > 0) {
+              rowBg[35] = '#e6f4ea'; rowFc[35] = '#137333';
+            }
+          }
+
+          // Светофор для общего статуса (AN)
+          if (statusText === 'ОК') {
+            rowBg[39] = '#e6f4ea'; rowFc[39] = '#137333'; rowFw[39] = 'bold';
+          } else if (statusText.indexOf('КОНФЛИКТ') !== -1 || (mCur !== null && mCur < 0)) {
+            rowBg[39] = '#fce8e6'; rowFc[39] = '#c5221f'; rowFw[39] = 'bold';
+          } else if (statusText.indexOf('ВНИМАНИЕ:') === 0) {
+            rowBg[39] = '#fef7e0'; rowFc[39] = '#b06000';
+          }
+        }
+
+        // Светофор для статуса акций (AM)
+        if (actText.indexOf('КОНФЛИКТ') !== -1 || actText.indexOf('БЛОК') !== -1) {
+          rowBg[38] = '#fce8e6'; rowFc[38] = '#c5221f'; rowFw[38] = 'bold';
+        } else if (actText.indexOf('ВНИМАНИЕ') !== -1) {
+          rowBg[38] = '#fef7e0'; rowFc[38] = '#b06000'; rowFw[38] = 'bold';
+        } else if (actText.indexOf('ОК') === 0) {
+          rowBg[38] = '#e6f4ea'; rowFc[38] = '#137333';
+        }
+      }
+
+      bgs[i] = rowBg;
+      fcs[i] = rowFc;
+      fws[i] = rowFw;
+    }
+
+    const dataRange = sh.getRange(dataStartRow, 1, n, cols);
+    if (typeof dataRange.setNumberFormats === 'function') dataRange.setNumberFormats(fmts);
+    if (typeof dataRange.setBackgrounds === 'function') dataRange.setBackgrounds(bgs);
+    if (typeof dataRange.setFontColors === 'function') dataRange.setFontColors(fcs);
+    if (typeof dataRange.setFontWeights === 'function') dataRange.setFontWeights(fws);
+  }
+
+  // 4. Оптимальные ширины главных колонок
+  const widths = {
+    1: 165,  // A: Offer id
+    2: 105,  // B: SKU
+    3: 270,  // C: Наименование
+    5: 68,   // E: Схема
+    9: 105,  // I: Ленд-кост, ₽
+    15: 120, // O: Логистика с возвратами, ₽
+    17: 95,  // Q: Комиссия, %
+    21: 110, // U: Цена с акцией, ₽
+    25: 115, // Y: Наценка по цене с акцией, %
+    32: 110, // AF: Безубыточность, ₽
+    33: 125, // AG: Ограничение для акций (наш пол), ₽
+    35: 115, // AI: Целевая цена, ₽
+    36: 115, // AJ: Прибыль до налогов, ₽
+    39: 210, // AM: Статус акций
+    40: 340  // AN: Статус / Предупреждения
+  };
+  Object.keys(widths).forEach(function (colKey) {
+    try { sh.setColumnWidth(Number(colKey), widths[colKey]); } catch (e) {}
+  });
+
+  // 5. Группировка деталей [+/-] и автофильтр по строке 4
+  setupCalcColumnGroups_(sh);
+  resetSheetFilter_(sh, hdrRow, (calcRows ? calcRows.length : 0) + 1, cols);
+}
+
+/**
+ * UX/UI оформление листа «Акции»:
+ * - шапка A1:K1 (данные Ozon) и L1:O1 (наш блок контроля пола);
+ * - светофор по строкам в колонках L:O и F:G;
+ * - закрепление 1 строки и 4 колонок, автофильтр.
+ */
+function styleActionsSheet_(sh, actRows) {
+  if (!sh) return;
+  const cols = CFG.ACT_COLS || 15;
+  try {
+    sh.setFrozenRows(1);
+    if (typeof sh.setFrozenColumns === 'function') sh.setFrozenColumns(4);
+  } catch (e) {}
+
+  const hdrBg = new Array(cols).fill('#1f4e79');
+  const hdrFc = new Array(cols).fill('#ffffff');
+  const hdrFw = new Array(cols).fill('bold');
+  for (let c = 11; c < cols; c++) hdrBg[c] = '#0e6251'; // L..O — блок контроля ограничений
+
+  const hdrRange = sh.getRange(1, 1, 1, cols);
+  if (typeof hdrRange.setBackgrounds === 'function') hdrRange.setBackgrounds([hdrBg]);
+  if (typeof hdrRange.setFontColors === 'function') hdrRange.setFontColors([hdrFc]);
+  if (typeof hdrRange.setFontWeights === 'function') hdrRange.setFontWeights([hdrFw]);
+  hdrRange.setWrap(true);
+
+  if (actRows && actRows.length) {
+    const n = actRows.length;
+    const bgs = new Array(n);
+    const fcs = new Array(n);
+    const fws = new Array(n);
+    const fmtRow = [
+      '0', '@', '@', '0', '#,##0', '#,##0', '#,##0', '0', '0', '@', '@',
+      '#,##0', '#,##0', '0.00"%"', '@'
+    ];
+    const fmts = new Array(n);
+
+    for (let i = 0; i < n; i++) {
+      const r = actRows[i];
+      const status = String(r[14] || '');
+      const zebra = (i % 2 === 1) ? '#f8f9fa' : '#ffffff';
+      const rowBg = new Array(cols).fill(zebra);
+      const rowFc = new Array(cols).fill('#202124');
+      const rowFw = new Array(cols).fill('normal');
+      fmts[i] = fmtRow;
+
+      rowFw[2] = 'bold';  // Offer id
+      rowFw[11] = 'bold'; // Наш мин. пол
+
+      if (status.indexOf('КОНФЛИКТ') === 0) {
+        for (let c = 11; c < cols; c++) {
+          rowBg[c] = '#fce8e6'; rowFc[c] = '#c5221f'; rowFw[c] = 'bold';
+        }
+        rowBg[6] = '#fce8e6'; rowFc[6] = '#c5221f'; rowFw[6] = 'bold'; // Макс. допустимая цена Ozon
+      } else if (status.indexOf('ВНИМАНИЕ') === 0) {
+        for (let c = 11; c < cols; c++) {
+          rowBg[c] = '#fef7e0'; rowFc[c] = '#b06000'; rowFw[c] = 'bold';
+        }
+        rowBg[5] = '#fef7e0'; rowFc[5] = '#b06000'; rowFw[5] = 'bold'; // Цена акции
+      } else if (status.indexOf('ОК') === 0) {
+        for (let c = 11; c < cols; c++) {
+          rowBg[c] = '#e6f4ea'; rowFc[c] = '#137333';
+        }
+        rowFw[14] = 'bold';
+      } else if (status.indexOf('БЛОК') === 0) {
+        for (let c = 11; c < cols; c++) {
+          rowBg[c] = '#f1f3f4'; rowFc[c] = '#5f6368';
+        }
+      }
+
+      bgs[i] = rowBg;
+      fcs[i] = rowFc;
+      fws[i] = rowFw;
+    }
+
+    const dataRange = sh.getRange(2, 1, n, cols);
+    if (typeof dataRange.setNumberFormats === 'function') dataRange.setNumberFormats(fmts);
+    if (typeof dataRange.setBackgrounds === 'function') dataRange.setBackgrounds(bgs);
+    if (typeof dataRange.setFontColors === 'function') dataRange.setFontColors(fcs);
+    if (typeof dataRange.setFontWeights === 'function') dataRange.setFontWeights(fws);
+  }
+
+  const widths = { 1: 95, 2: 240, 3: 165, 4: 105, 5: 110, 6: 110, 7: 135, 12: 120, 13: 135, 14: 135, 15: 250 };
+  Object.keys(widths).forEach(function (colKey) {
+    try { sh.setColumnWidth(Number(colKey), widths[colKey]); } catch (e) {}
+  });
+  resetSheetFilter_(sh, 1, (actRows ? actRows.length : 0) + 1, cols);
+}
+
+/**
+ * UX/UI оформление листа «Настройки расчёта»:
+ * - шапка A1:E1 в синем стиле настроек;
+ * - памятка с правилами каскада и примерами заполнения справа в колонках G1:H9.
+ */
+function styleCalcSettingsSheet_(sh) {
+  if (!sh) return;
+  try { sh.setFrozenRows(1); } catch (e) {}
+
+  const hdr = calcSettingsHeaders_();
+  const hdrRange = sh.getRange(1, 1, 1, hdr.length);
+  hdrRange.setValues([hdr]).setFontWeight('bold').setWrap(true);
+  if (typeof hdrRange.setBackground === 'function') hdrRange.setBackground('#1a73e8');
+  if (typeof hdrRange.setFontColor === 'function') hdrRange.setFontColor('#ffffff');
+
+  // Памятка справа в колонках G:H (не мешает чтению A:E)
+  try {
+    const guide = [
+      ['📌 КАК РАБОТАЕТ КАСКАД НАЦЕНОК (Э3)', 'Приоритет сверху вниз:'],
+      ['1. Уровень SKU (высший приоритет)', 'Укажите в кол. A «SKU», а в кол. B — Offer id (напр. Кромка-Дуб-44мм-5м.п.) или числовой SKU Ozon.'],
+      ['2. Уровень Категория', 'Укажите в кол. A «Категория», а в кол. B — значение из колонки P листа «Номенклатура».'],
+      ['3. По умолчанию (общая)', 'Если ни SKU, ни категория здесь не заданы — берутся Параметры!B10 (целевая) и Параметры!B9 (мин.).'],
+      ['Формат наценок (колонки C и D)', 'Можно вводить числом в процентах (например 35 или 20) либо долей (0,35 или 0,20).'],
+      ['Пример строки 1 (для артикула):', 'SKU  |  Кромка-Дуб-44мм-5м.п.  |  35  |  22  |  Индивидуальная цель по хиту'],
+      ['Пример строки 2 (для категории):', 'Категория  |  17028922  |  28  |  18  |  Базовая наценка для категории']
+    ];
+    if (sh.getMaxColumns() < 8 && typeof sh.insertColumnsAfter === 'function') {
+      sh.insertColumnsAfter(sh.getMaxColumns(), 8 - sh.getMaxColumns());
+    }
+    const gRange = sh.getRange(1, 7, guide.length, 2);
+    gRange.setValues(guide).setWrap(true);
+    sh.getRange(1, 7, 1, 2).setBackground('#e8f0fe').setFontColor('#1967d2').setFontWeight('bold');
+    sh.getRange(2, 7, guide.length - 1, 2).setBackground('#f8f9fa').setFontColor('#3c4043');
+  } catch (e) {}
+
+  const widths = { 1: 190, 2: 230, 3: 150, 4: 150, 5: 260, 6: 30, 7: 250, 8: 420 };
+  Object.keys(widths).forEach(function (colKey) {
+    try { sh.setColumnWidth(Number(colKey), widths[colKey]); } catch (e) {}
+  });
+}
+
+/**
+ * UX/UI оформление листа «Параметры» как пульта управления.
+ */
+function styleParamsSheet_(sh) {
+  if (!sh || sh.getLastRow() < 11) return;
+  try {
+    sh.setFrozenRows(3);
+    sh.getRange(1, 1, 1, 3).setBackground('#1a73e8').setFontColor('#ffffff').setFontWeight('bold');
+    sh.getRange(3, 1, 1, 3).setBackground('#202124').setFontColor('#ffffff').setFontWeight('bold');
+    const lastR = Math.min(sh.getLastRow(), 14);
+    if (lastR >= 4) {
+      sh.getRange(4, 1, lastR - 3, 1).setFontWeight('bold').setBackground('#f8f9fa');
+      sh.getRange(4, 2, Math.min(10, lastR - 3), 1).setBackground('#e8f0fe').setFontColor('#1967d2').setFontWeight('bold');
+      sh.getRange(4, 3, lastR - 3, 1).setWrap(true).setFontColor('#5f6368');
+      if (lastR >= 14) {
+        sh.getRange(14, 2, 1, 1).setBackground('#f1f3f4').setFontColor('#3c4043').setFontWeight('bold');
+      }
+    }
+    sh.setColumnWidth(1, 330);
+    sh.setColumnWidth(2, 120);
+    sh.setColumnWidth(3, 560);
+  } catch (e) {}
+}
+
+/**
+ * Упорядочивает вкладки книги слева направо по 4 ролевым зонам и красит ярлычки.
+ */
+function organizeWorkbookTabs_(ss) {
+  if (!ss) return;
+  const layout = CFG.TAB_LAYOUT || [];
+  if (!layout.length) return;
+
+  // 1. Красим ярлычки всех известных вкладок
+  layout.forEach(function (item) {
+    const sh = ss.getSheetByName(item.name);
+    if (sh && typeof sh.setTabColor === 'function') {
+      try { sh.setTabColor(item.color); } catch (e) {}
+    }
+  });
+
+  // 2. Проверяем, нужно ли переставлять вкладки
+  try {
+    if (typeof ss.getSheets !== 'function' || typeof ss.moveActiveSheet !== 'function') return;
+    const desiredNames = [];
+    layout.forEach(function (item) {
+      if (ss.getSheetByName(item.name)) desiredNames.push(item.name);
+    });
+    const currentNames = ss.getSheets().map(function (s) { return s.getName(); });
+    let alreadyOrdered = true;
+    for (let i = 0; i < desiredNames.length; i++) {
+      if (currentNames[i] !== desiredNames[i]) {
+        alreadyOrdered = false;
+        break;
+      }
+    }
+    if (alreadyOrdered) return;
+
+    const prevActive = typeof ss.getActiveSheet === 'function' ? ss.getActiveSheet() : null;
+    for (let pos = 0; pos < desiredNames.length; pos++) {
+      const sh = ss.getSheetByName(desiredNames[pos]);
+      if (sh) {
+        ss.setActiveSheet(sh);
+        ss.moveActiveSheet(pos + 1);
+      }
+    }
+    const calcSh = ss.getSheetByName(CFG.SHEETS.CALC) || prevActive;
+    if (calcSh && typeof ss.setActiveSheet === 'function') ss.setActiveSheet(calcSh);
+  } catch (e) {}
+}
+
+/**
+ * Комплексное наведение порядка и UX/UI дизайна во всей книге:
+ * пересчитывает и оформляет «Расчёт» и «Акции», оформляет «Параметры»,
+ * «Настройки расчёта», «Проблемы данных» и упорядочивает вкладки по зонам.
+ */
+function applyWorkbookUx() {
+  const ss = ss_();
+  ensureSheets();
+  const res = calculateUnitEconomics();
+  styleParamsSheet_(ss.getSheetByName('Параметры'));
+  styleCalcSettingsSheet_(ss.getSheetByName(CFG.SHEETS.CALC_SETTINGS));
+  const probSh = ss.getSheetByName(CFG.SHEETS.PROBLEMS);
+  if (probSh && probSh.getLastRow() >= 1) {
+    try {
+      probSh.setFrozenRows(1);
+      probSh.getRange(1, 1, 1, 4).setBackground('#b06000').setFontColor('#ffffff').setFontWeight('bold');
+      resetSheetFilter_(probSh, 1, probSh.getLastRow(), 4);
+    } catch (e) {}
+  }
+  organizeWorkbookTabs_(ss);
+  recalc_();
+  return res;
 }

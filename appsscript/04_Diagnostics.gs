@@ -39,13 +39,13 @@ function validateWorkbook() {
 function ensureSheets() {
   sheet_(CFG.SHEETS.LOG, ['Время', 'Уровень', 'Сообщение']);
   sheet_(CFG.SHEETS.FACT, factHeaders_());
-  sheet_(CFG.SHEETS.ACT, actHeaders_());
+  sheet_(CFG.SHEETS.ACT, ['Акция (ID)', 'Название акции', 'Offer id', 'Product id', 'Цена до акции, ₽',
+                          'Цена акции, ₽', 'Макс. допустимая цена, ₽', 'Мин. кол-во', 'В акции, шт',
+                          'Способ', 'Дата среза']);
   sheet_(CFG.SHEETS.SALES, salesHeaders_());
   sheet_(CFG.SHEETS.DRR, drrHeaders_());
   sheet_(CFG.SHEETS.PROBLEMS, ['Offer id', 'Наименование', 'Что не хватает', 'Что делать']);
   sheet_(CFG.SHEETS.COMM, commHeaders_());
-  if (typeof calcSettingsHeaders_ === 'function') sheet_(CFG.SHEETS.CALC_SETTINGS, calcSettingsHeaders_());
-  if (typeof calcHeaders_ === 'function') sheet_(CFG.SHEETS.CALC, calcHeaders_());
   logMsg_('INFO', 'ensureSheets: служебные листы на месте (' +
     ss_().getSheets().length + ' листов в файле)');
 }

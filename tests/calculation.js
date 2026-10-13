@@ -180,7 +180,15 @@ const b14After = par.getRange(14, 2).getValue();
 assert(b14After === 1.5, 'Параметры!B14 не должен изменяться калькулятором');
 
 const calcSh = SpreadsheetApp._get(CFG.SHEETS.CALC);
-const rows = calcSh.getRange(2, 1, 6, CFG.CALC_COLS).getValues();
+const banner = calcSh.getRange(1, 1, 3, CFG.CALC_COLS).getValues();
+assert(String(banner[0][0]).indexOf('ЮНИТ-ЭКОНОМИКА И ЦЕНЫ') >= 0, 'KPI-шапка: заголовок в A1');
+assert(banner[1][1] === 6, 'KPI-шапка: всего SKU в B2 = 6');
+assert(String(banner[1][2]).indexOf('Рассчитано: 4') >= 0, 'KPI-шапка: покрытие базы в C2');
+
+const hdrRow = calcSh.getRange(CFG.CALC_HEADER_ROW, 1, 1, CFG.CALC_COLS).getValues()[0];
+assert(hdrRow[0] === 'Offer id' && hdrRow[34] === 'Целевая цена, ₽', 'Строка 4 листа «Расчёт» содержит заголовки колонок');
+
+const rows = calcSh.getRange(CFG.CALC_DATA_START_ROW, 1, 6, CFG.CALC_COLS).getValues();
 
 // 1) Кромка-Дуб-44мм-5м.п.:
 // Схема FBO, ЛК = 1343.66 * 0.22 + 16 = 311.6052 -> 311.61
@@ -256,10 +264,34 @@ assert(String(actUpdated[1][14]).indexOf('ВНИМАНИЕ: цена акции 
 assert(String(actUpdated[2][14]).indexOf('ОК: пол ≤ лимита Ozon') >= 0,
   'Акции строка 3 (Kleiberit 2300 ₽ при лимите 2500 ₽): ОК');
 
-// Проверяем ensureSheets(): создаёт в том числе «Расчёт» и «Настройки расчёта»
-ensureSheets();
-const sheetNames = SpreadsheetApp.getSheets().map(function (s) { return s.getName(); });
-assert(sheetNames.indexOf(CFG.SHEETS.CALC) >= 0 && sheetNames.indexOf(CFG.SHEETS.CALC_SETTINGS) >= 0,
-  'ensureSheets должен гарантировать наличие листов «Расчёт» и «Настройки расчёта»');
+// Проверяем UX/UI оформление: закрепление, группировки [+/-], светофор, фильтр, порядок и цвета вкладок
+assert(calcSh.getFrozenRows() === 4, 'На листе «Расчёт» должны быть закреплены 4 строки (KPI-шапка + заголовки)');
+assert(calcSh.getFrozenColumns() === 3, 'На листе «Расчёт» должны быть закреплены 3 колонки (Offer id, SKU, Наименование)');
+assert(calcSh.columnGroups.length === CFG.CALC_COLUMN_GROUPS.length && calcSh.groupsCollapsed === true,
+  'На листе «Расчёт» должны быть созданы и свёрнуты все 9 групп деталей [+/-]');
+assert(calcSh.getFilter() !== null && calcSh.getFilter().range[0] === 4,
+  'На листе «Расчёт» должен быть включён автофильтр по строке 4');
 
-console.log('РАСЧЁТ Э2/Э3 (calculation.js): ВСЕ ПРОВЕРКИ ПРОШЛИ ✓');
+const calcBgs = calcSh.getRange(CFG.CALC_DATA_START_ROW, 1, 6, CFG.CALC_COLS).getBackgrounds();
+assert(calcBgs[0][24] === '#fce8e6', 'Светофор: убыточная наценка у Дуба окрашена красным (#fce8e6)');
+assert(calcBgs[0][38] === '#fce8e6', 'Светофор: конфликт акции у Дуба окрашен красным (#fce8e6)');
+assert(calcBgs[5][39] === '#e8eaed', 'Светофор: пропущенный без СС товар окрашен серым (#e8eaed)');
+
+const actBgs = actSh.getRange(2, 1, 3, CFG.ACT_COLS).getBackgrounds();
+assert(actBgs[0][14] === '#fce8e6', 'Светофор «Акции»: строка с конфликтом окрашена красным (#fce8e6)');
+assert(actBgs[1][14] === '#fef7e0', 'Светофор «Акции»: строка ниже пола окрашена жёлтым (#fef7e0)');
+assert(actBgs[2][14] === '#e6f4ea', 'Светофор «Акции»: строка ОК окрашена зелёным (#e6f4ea)');
+
+const guideTitle = setSh.getRange(1, 7).getValue();
+assert(String(guideTitle).indexOf('КАК РАБОТАЕТ КАСКАД НАЦЕНОК') >= 0,
+  'На листе «Настройки расчёта» справа должна быть памятка по каскаду наценок');
+
+// Проверяем applyWorkbookUx() и порядок вкладок
+applyWorkbookUx();
+const orderedNames = SpreadsheetApp.getSheets().map(function (s) { return s.getName(); });
+assert(orderedNames[0] === 'Расчёт' && orderedNames[1] === 'Акции' && orderedNames[2] === 'Проблемы данных',
+  'Первые 3 вкладки слева должны быть рабочими экранами: Расчёт, Акции, Проблемы данных');
+assert(calcSh.getTabColor() === '#1e8e3e', 'Ярлычок «Расчёт» должен быть зелёным (#1e8e3e)');
+assert(par.getTabColor() === '#1a73e8', 'Ярлычок «Параметры» должен быть синим (#1a73e8)');
+
+console.log('РАСЧЁТ Э2/Э3 И UX/UI (calculation.js): ВСЕ ПРОВЕРКИ ПРОШЛИ ✓');

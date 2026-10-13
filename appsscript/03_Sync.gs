@@ -1666,6 +1666,7 @@ function onOpen() {
     .addItem('Синхронизировать рекламу (ДРР)', 'menuSyncDrr')
     .addItem('Синхронизировать акции', 'menuSyncActions')
     .addItem('Рассчитать юнит-экономику (Э2/Э3)', 'menuCalculate')
+    .addItem('Навести порядок и обновить дизайн таблицы', 'menuApplyUx')
     .addSeparator()
     .addItem('Добавить недостающие SKU в базу', 'menuAddMissing')
     .addItem('Обновить инструкцию в таблице', 'menuRefreshInstruction')
@@ -1681,11 +1682,52 @@ function onOpen() {
     .addToUi();
 }
 
+function formatCalcAlert_(res) {
+  if (!res || typeof res !== 'object') return 'Готово.';
+  return [
+    'Расчёт юнит-экономики (Э2/Э3) завершён (' + (res.updatedAt || '') + '):',
+    '',
+    '• Всего артикулов в базе: ' + (res.total || 0),
+    '• Рассчитано цен: ' + (res.calculated || 0) +
+      ' (пропущено без СС/кратности: ' + (res.skippedNoCost || 0) +
+      ', блок при выкупе 0%: ' + (res.blockedZeroBuyout || 0) + ')',
+    '• Комиссия: из «Комиссия факт» — ' + (res.commFromFact || 0) +
+      ', из «Факт Ozon» — ' + (res.commFromFallback || 0),
+    '• Выкуп: из «Продажи» — ' + (res.buyoutFromSales || 0) +
+      ', по умолчанию (Параметры!B8) — ' + (res.buyoutFallback || 0),
+    '• Наценка ниже минимальной: ' + (res.belowMinMarkup || 0) + ' SKU',
+    '• Цена ниже целевой: ' + (res.belowTargetPrice || 0) + ' SKU',
+    '• Акции (проверено строк: ' + (res.actionsChecked || 0) + '):',
+    '  — проходят лимит Ozon: ' + (res.actionsAllowed || 0) +
+      (res.actionsBelowFloor ? ' (из них цена акции ниже нашего пола: ' + res.actionsBelowFloor + ')' : ''),
+    '  — КОНФЛИКТ (наш пол > лимита Ozon): ' + (res.actionsBlocked || 0),
+    '',
+    'Лист «Расчёт» (KPI-шапка, группы [+], светофор и фильтры) и контроль на листе «Акции» обновлены.'
+  ].join('\n');
+}
+
 function menuSyncFact()    { ui_('Синхронизация данных', syncFact); }
 function menuSyncSales()   { ui_('Продажи по SKU', syncSales14); }
 function menuSyncActions() { ui_('Синхронизация акций', syncActions); }
 function menuSyncDrr()     { ui_('Синхронизация рекламы', syncDrr14); }
-function menuCalculate()   { ui_('Расчёт юнит-экономики (Э2/Э3)', calculateUnitEconomics); }
+function menuCalculate() {
+  const ui = SpreadsheetApp.getUi();
+  try {
+    const res = calculateUnitEconomics();
+    ui.alert('Расчёт юнит-экономики (Э2/Э3)', formatCalcAlert_(res), ui.ButtonSet.OK);
+  } catch (e) {
+    ui.alert('Расчёт юнит-экономики (Э2/Э3)', 'Ошибка: ' + e.message + '\n\nПодробности — меню «Показать лог».', ui.ButtonSet.OK);
+  }
+}
+function menuApplyUx() {
+  const ui = SpreadsheetApp.getUi();
+  try {
+    const res = applyWorkbookUx();
+    ui.alert('Дизайн и порядок вкладок обновлены', formatCalcAlert_(res), ui.ButtonSet.OK);
+  } catch (e) {
+    ui.alert('Дизайн и порядок вкладок', 'Ошибка: ' + e.message + '\n\nПодробности — меню «Показать лог».', ui.ButtonSet.OK);
+  }
+}
 function menuAddMissing()  {
   const ui = SpreadsheetApp.getUi();
   const r = ui.alert('Добавить недостающие SKU',

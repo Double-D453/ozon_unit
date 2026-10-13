@@ -16,274 +16,6 @@
  */
 
 /**
- * Привести процент или долю к доле (0..1).
- * Например: 48 -> 0.48, 0.48 -> 0.48, "30%" -> 0.30.
- */
-function toFractionRate(v) {
-  if (v === '' || v === null || v === undefined || typeof v === 'boolean') return null;
-  if (typeof v === 'string') {
-    const s = v.trim();
-    if (!s) return null;
-    if (s.endsWith('%')) {
-      const p = num(s.slice(0, -1));
-      return p !== null ? p / 100 : null;
-    }
-  }
-  const n = num(v);
-  if (n === null) return null;
-  if (Math.abs(n) > 1) return n / 100;
-  return n;
-}
-
-/**
- * Выбор расчётной ставки комиссии (Э2/Э3):
- *   1) сначала фактическая ставка по SKU из «Комиссия факт!J»;
- *   2) если её нет — текущая расчётная ставка из «Факт Ozon!W/X».
- */
-function resolveCommissionRate(factSkuRate, fallbackSchemeRate, schemeLabel) {
-  const fact = toFractionRate(factSkuRate);
-  if (fact !== null && fact > 0 && fact < 1) {
-    return {
-      rate: fact,
-      percent: Math.round(fact * 10000) / 100,
-      source: 'Комиссия факт!J'
-    };
-  }
-  const fb = toFractionRate(fallbackSchemeRate);
-  if (fb !== null && fb > 0 && fb < 1) {
-    const col = schemeLabel === 'FBO' ? 'Факт Ozon!W' : (schemeLabel === 'FBS' ? 'Факт Ozon!X' : 'Факт Ozon!W/X');
-    return {
-      rate: fb,
-      percent: Math.round(fb * 10000) / 100,
-      source: col
-    };
-  }
-  return { rate: null, percent: null, source: '' };
-}
-
-/**
- * Валидация и выбор коэффициента выкупа (Э2/Э3):
- *   • берём из «Продажи!M», если значение в диапазоне 0–100%;
- *   • пустое, отрицательное или >100% заменяем на «Параметры!B8» и предупреждаем;
- *   • валидные 0% принимаем, но блокируем цену: ожидаемая стоимость возврата
- *     на выкупленную единицу неограниченна.
- */
-function resolveBuyoutRate(salesBuyout, defaultBuyout) {
-  const defFrac = toFractionRate(defaultBuyout);
-  const fallback = (defFrac !== null && defFrac >= 0 && defFrac <= 1) ? defFrac : 1;
-  const fallbackPct = Math.round(fallback * 10000) / 100;
-
-  if (salesBuyout === '' || salesBuyout === null || salesBuyout === undefined || typeof salesBuyout === 'boolean') {
-    return {
-      rate: fallback,
-      percent: fallbackPct,
-      source: 'Параметры!B8',
-      blocked: fallback === 0,
-      warning: 'выкуп: пусто в Продажи!M, взят Параметры!B8'
-    };
-  }
-
-  let raw = salesBuyout;
-  let explicitPct = false;
-  if (typeof raw === 'string') {
-    const s = raw.trim();
-    if (!s) {
-      return {
-        rate: fallback,
-        percent: fallbackPct,
-        source: 'Параметры!B8',
-        blocked: fallback === 0,
-        warning: 'выкуп: пусто в Продажи!M, взят Параметры!B8'
-      };
-    }
-    if (s.endsWith('%')) {
-      explicitPct = true;
-      raw = s.slice(0, -1);
-    }
-  }
-
-  const n = num(raw);
-  if (n === null) {
-    return {
-      rate: fallback,
-      percent: fallbackPct,
-      source: 'Параметры!B8',
-      blocked: fallback === 0,
-      warning: 'выкуп: некорректное значение в Продажи!M, взят Параметры!B8'
-    };
-  }
-
-  if (n < 0) {
-    return {
-      rate: fallback,
-      percent: fallbackPct,
-      source: 'Параметры!B8',
-      blocked: fallback === 0,
-      warning: 'выкуп: отрицательное значение в Продажи!M, взят Параметры!B8'
-    };
-  }
-
-  if (n === 0) {
-    return {
-      rate: 0,
-      percent: 0,
-      source: 'Продажи!M',
-      blocked: true,
-      warning: 'выкуп 0%: расчёт цены заблокирован (ожидаемая стоимость возврата на выкупленную единицу неограниченна)'
-    };
-  }
-
-  let frac;
-  if (explicitPct) {
-    frac = n / 100;
-  } else if (n <= 1) {
-    frac = n;
-  } else if (n > 1 && n < 2) {
-    frac = n;
-  } else {
-    frac = n / 100;
-  }
-
-  if (frac > 1) {
-    return {
-      rate: fallback,
-      percent: fallbackPct,
-      source: 'Параметры!B8',
-      blocked: fallback === 0,
-      warning: 'выкуп: значение > 100% в Продажи!M, взят Параметры!B8'
-    };
-  }
-
-  return {
-    rate: frac,
-    percent: Math.round(frac * 10000) / 100,
-    source: 'Продажи!M',
-    blocked: false,
-    warning: null
-  };
-}
-
-/**
- * Ожидаемый расход на возвратный тариф на 1 выкупленную единицу:
- *   R = тариф возврата × (1 − выкуп) / выкуп
- * При выкупе 0% ожидаемая стоимость возврата неограниченна -> null.
- */
-function returnCostPerUnit(returnTariff, buyoutRate) {
-  if (buyoutRate === null || buyoutRate === undefined) return 0;
-  const b = num(buyoutRate);
-  if (b === null || b <= 0 || b > 1) return null;
-  const rt = num(returnTariff) || 0;
-  if (rt < 0) return null;
-  if (b === 1 || rt === 0) return 0;
-  return rt * (1 - b) / b;
-}
-
-/**
- * Каскад наценок: SKU → категория (Номенклатура!P) → общая (Параметры!B10/B9).
- */
-function resolveMarkupCascade(skuMarkup, categoryMarkup, defaultMarkup) {
-  const s = toFractionRate(skuMarkup);
-  if (s !== null && s >= 0) return { rate: s, source: 'SKU' };
-  const c = toFractionRate(categoryMarkup);
-  if (c !== null && c >= 0) return { rate: c, source: 'категория' };
-  const d = toFractionRate(defaultMarkup);
-  if (d !== null && d >= 0) return { rate: d, source: 'Параметры' };
-  return { rate: null, source: '' };
-}
-
-/**
- * Округление цены вверх (ceil) по шагу из «Параметры!B11».
- */
-function roundPriceUp(price, step) {
-  const p = num(price);
-  if (p === null || p <= 0) return null;
-  const s = num(step);
-  if (s === null || s <= 0) return p;
-  const k = Math.ceil((p - 1e-9) / s);
-  return Math.round((k * s) * 10000) / 10000;
-}
-
-/**
- * Налоговый блок (справочно, отдельно от доналоговой целевой цены):
- *   • неподтверждённый входящий НДС из цены НЕ вычитается;
- *   • выделенный НДС с продажи = P × vat / (1 + vat);
- *   • налог на прибыль = max(0, profitBeforeTax) × profitTax.
- */
-function taxBreakdown(price, profitBeforeTax, vatRate, profitTaxRate) {
-  const p = num(price);
-  const pbt = num(profitBeforeTax);
-  const v = toFractionRate(vatRate) || 0;
-  const pt = toFractionRate(profitTaxRate) || 0;
-  const vatAmount = (p !== null && p > 0 && v > 0) ? (p * v / (1 + v)) : 0;
-  const profitTax = (pbt !== null && pbt > 0 && pt > 0) ? (pbt * pt) : 0;
-  const profitAfterProfitTax = pbt !== null ? (pbt - profitTax) : null;
-  return {
-    vatRate: v,
-    profitTaxRate: pt,
-    vatAmount,
-    profitTax,
-    profitBeforeTax: pbt,
-    profitAfterProfitTax
-  };
-}
-
-/**
- * Проверка ограничения акции по одной строке листа «Акции»:
- *   • наш минимальный пол (floorPrice) должен быть не выше лимита Ozon (maxActionPrice);
- *   • дополнительно проверяем, не ниже ли текущая цена акции нашего пола.
- */
-function checkActionConstraint(floorPrice, maxActionPrice, actionPrice) {
-  const floor = num(floorPrice);
-  const limit = num(maxActionPrice);
-  const actP = num(actionPrice);
-
-  if (floor === null || floor <= 0) {
-    return {
-      ok: false,
-      allowed: false,
-      belowFloor: false,
-      headroomRub: null,
-      status: 'БЛОК: нет расчёта нашего пола',
-      warning: 'акция: нет расчёта минимального пола по SKU'
-    };
-  }
-
-  const headroomRub = (limit !== null && limit > 0) ? (limit - floor) : null;
-  if (limit !== null && limit > 0 && floor > limit + 1e-9) {
-    return {
-      ok: true,
-      allowed: false,
-      belowFloor: (actP !== null && actP > 0) ? actP < floor - 1e-9 : true,
-      headroomRub,
-      status: 'КОНФЛИКТ: наш пол выше лимита Ozon',
-      warning: 'акция: наш минимальный пол (' + Math.round(floor * 100) / 100 +
-        ' ₽) выше лимита Ozon (' + Math.round(limit * 100) / 100 + ' ₽)'
-    };
-  }
-
-  if (actP !== null && actP > 0 && actP < floor - 1e-9) {
-    return {
-      ok: true,
-      allowed: true,
-      belowFloor: true,
-      headroomRub,
-      status: 'ВНИМАНИЕ: цена акции ниже нашего пола',
-      warning: 'акция: текущая цена акции (' + Math.round(actP * 100) / 100 +
-        ' ₽) ниже нашего пола (' + Math.round(floor * 100) / 100 + ' ₽)'
-    };
-  }
-
-  return {
-    ok: true,
-    allowed: true,
-    belowFloor: false,
-    headroomRub,
-    status: 'ОК: пол ≤ лимита Ozon',
-    warning: null
-  };
-}
-
-/**
  * Ленд-кост — полная себестоимость единицы товара на складе.
  *   ЛК = СС × Кратность + Упаковка + Транспорт
  * Кратность нужна, потому что себестоимость в 1С заведена за упаковку
@@ -397,179 +129,78 @@ function markupAtPrice(price, ctx) {
  *
  * @param {object} sku
  *   costPerUnit, multiplicity, packaging, transport   — ленд-кост
- *   commissionRate  — комиссия к расчёту (ДОЛЯ). При передаче factCommissionRate
- *                     используется приоритет Комиссия факт!J → Факт Ozon!W/X
+ *   commissionRate  — комиссия к расчёту (ДОЛЯ). В v0.7 это списочная ставка минус
+ *                     скидка за отсрочку выплаты, см. docs/API-MAP.md
  *   drrRate         — доля рекламных расходов в выручке
  *   logistics       — ₽, считаем через logisticsFbo / logisticsFbs
- *   returnTariff    — ₽, тариф возврата (учитывается как тариф × (1 − выкуп) / выкуп)
- *   salesBuyout, defaultBuyout — % выкупа из Продажи!M и фолбэк Параметры!B8
  *   acquiring       — ₽
  *   price           — текущая цена (с акцией)
- *   priceWithoutAction — цена без акции
  *   oldPrice        — зачёркнутая цена
  *   minPrice        — ограничение из Ozon
- *   minMarkup, targetMarkup — доли (поддерживается каскад SKU → категория → общая)
- *   roundStep       — шаг округления вверх из Параметры!B11
- *   vatRate, profitTaxRate — ставки НДС и налога на прибыль (показываются отдельно)
- *   actions         — строки листа «Акции» для проверки ограничений
+ *   minMarkup, targetMarkup — доли
  */
 function unitEconomics(sku) {
   const land = landCost(sku.costPerUnit, sku.multiplicity, sku.packaging, sku.transport);
   if (land === null) {
     return { ok: false, reason: 'нет ленд-коста: не заданы себестоимость и/или кратность' };
   }
-
-  let c = null;
-  let commissionSource = '';
-  if (sku.factCommissionRate !== undefined || sku.schemeCommissionRate !== undefined) {
-    const resolvedComm = resolveCommissionRate(
-      sku.factCommissionRate,
-      sku.schemeCommissionRate !== undefined ? sku.schemeCommissionRate : sku.commissionRate,
-      sku.scheme
-    );
-    c = resolvedComm.rate;
-    commissionSource = resolvedComm.source;
-  } else {
-    c = num(sku.commissionRate);
-    commissionSource = c !== null ? (sku.scheme === 'FBO' ? 'Факт Ozon!W' : 'Факт Ozon!X') : '';
-  }
+  const c = num(sku.commissionRate);
   if (c === null || c >= 1) return { ok: false, reason: 'нет комиссии или она ≥ 100%' };
-
-  const dRaw = sku.drrRate !== undefined ? sku.drrRate : sku.drr;
-  const d = num(dRaw) || 0;
-
-  let directLog = num(sku.logistics);
-  if (directLog === null) {
-    const scheme = sku.scheme === 'FBO' || sku.scheme === 'FBS'
-      ? sku.scheme
-      : ((num(sku.stockFbo) || 0) > 0 ? 'FBO' : 'FBS');
-    directLog = scheme === 'FBO'
-      ? logisticsFbo(sku.fboMin, sku.fboMax, sku.fboDeliv)
-      : logisticsFbs(sku.firstMileMin, sku.firstMileMax, sku.fbsMin, sku.fbsMax, sku.fbsDeliv);
-  }
-  directLog = directLog || 0;
-
-  // --- Выкуп и возвратный тариф ---
-  let buyoutInfo = { rate: 1, percent: 100, source: 'Параметры!B8', blocked: false, warning: null };
-  if (sku.salesBuyout !== undefined || sku.defaultBuyout !== undefined) {
-    buyoutInfo = resolveBuyoutRate(sku.salesBuyout, sku.defaultBuyout !== undefined ? sku.defaultBuyout : sku.buyoutRate);
-  } else if (sku.buyoutRate !== undefined && sku.buyoutRate !== null && sku.buyoutRate !== '') {
-    buyoutInfo = resolveBuyoutRate(sku.buyoutRate, 1);
-  }
-
-  const returnTariff = num(sku.returnTariff !== undefined
-    ? sku.returnTariff
-    : (sku.scheme === 'FBO' ? sku.returnFbo : sku.returnFbs)) || 0;
-  const returnCost = buyoutInfo.blocked ? null : returnCostPerUnit(returnTariff, buyoutInfo.rate);
-  const log = returnCost !== null ? (directLog + returnCost) : directLog;
-
+  const d = num(sku.drrRate) || 0;
+  const log = num(sku.logistics) || 0;
   const acq = num(sku.acquiring) || 0;
-  const curPriceVal = sku.price !== undefined ? sku.price : sku.currentPrice;
-  const noActionPriceVal = sku.priceWithoutAction !== undefined ? sku.priceWithoutAction : sku.noActionPrice;
-  const minPriceVal = sku.minPrice !== undefined ? sku.minPrice : sku.ozonMinPrice;
 
-  if (num(curPriceVal) === null) return { ok: false, reason: 'нет цены — считать наценку не с чего' };
+  const mPrice = markupFromPrice(sku.price, c, d, land, log, acq);
+  const mOld = markupFromPrice(sku.oldPrice, c, d, land, log, acq);
+  const mMin = markupFromPrice(sku.minPrice, c, d, land, log, acq);
+  const floor = actionFloor(sku.minMarkup, c, d, land, log, acq);
+  const target = priceFromMarkup(sku.targetMarkup, c, d, land, log, acq);
+  const breakEven = breakEvenPrice(c, d, land, log, acq);
 
-  const targetCascade = resolveMarkupCascade(sku.skuTargetMarkup, sku.categoryTargetMarkup, sku.targetMarkup);
-  const minCascade = resolveMarkupCascade(sku.skuMinMarkup, sku.categoryMinMarkup, sku.minMarkup);
-  const effTargetMarkup = targetCascade.rate !== null ? targetCascade.rate : num(sku.targetMarkup);
-  const effMinMarkup = minCascade.rate !== null ? minCascade.rate : num(sku.minMarkup);
-
-  const priceBlocked = Boolean(buyoutInfo.blocked);
-
-  const mPrice = !priceBlocked ? markupFromPrice(curPriceVal, c, d, land, log, acq) : null;
-  const mNoAction = (!priceBlocked && num(noActionPriceVal) !== null)
-    ? markupFromPrice(noActionPriceVal, c, d, land, log, acq)
-    : null;
-  const mOld = !priceBlocked ? markupFromPrice(sku.oldPrice, c, d, land, log, acq) : null;
-  const mMin = !priceBlocked ? markupFromPrice(minPriceVal, c, d, land, log, acq) : null;
-
-  const floor = !priceBlocked ? actionFloor(effMinMarkup, c, d, land, log, acq) : null;
-  const target = !priceBlocked ? priceFromMarkup(effTargetMarkup, c, d, land, log, acq) : null;
-  const breakEven = !priceBlocked ? breakEvenPrice(c, d, land, log, acq) : null;
-
-  const step = num(sku.roundStep);
-  const targetRounded = (step !== null && step > 0) ? roundPriceUp(target, step) : target;
-  const floorRounded = (step !== null && step > 0) ? roundPriceUp(floor, step) : floor;
-  const breakEvenRounded = (step !== null && step > 0) ? roundPriceUp(breakEven, step) : breakEven;
-
-  const curNum = num(curPriceVal);
-  const profitBeforeTax = (!priceBlocked && curNum !== null)
-    ? (curNum * (1 - c) * (1 - d) - log - acq - land)
-    : null;
-  const taxes = taxBreakdown(curNum, profitBeforeTax, sku.vatRate, sku.profitTaxRate);
-
-  const effectiveFloorForActions = floorRounded !== null ? floorRounded : floor;
-  const actionChecks = Array.isArray(sku.actions)
-    ? sku.actions.map(function (act) {
-        const chk = checkActionConstraint(
-          effectiveFloorForActions,
-          act.maxActionPrice !== undefined ? act.maxActionPrice : act.max_action_price,
-          act.actionPrice !== undefined ? act.actionPrice : act.action_price
-        );
-        return Object.assign({}, act, chk);
-      })
-    : [];
-
-  const warnings = [
-    buyoutInfo.warning,
-    !isFeasible(c, d)
-      ? 'комиссия и ДРР вместе забирают ' + r0((1 - headroom(c, d)) * 100) +
-        '% цены — расчёт формально верен, но цена выйдет нерыночной' : null,
-    (num(minPriceVal) !== null && floor !== null && num(minPriceVal) < floor)
-      ? 'min_price в Ozon ниже нашего ограничения для акций' : null,
-    (target !== null && curNum !== null && target > curNum)
-      ? 'текущая цена ниже целевой' : null,
-    (mPrice !== null && effMinMarkup !== null && mPrice < effMinMarkup)
-      ? 'фактическая наценка ниже минимально допустимой' : null
-  ].concat(actionChecks.map(function (a) { return a.warning; })).filter(Boolean);
+  if (mPrice === null) return { ok: false, reason: 'нет цены — считать наценку не с чего' };
 
   return {
     ok: true,
     landCost: land,
-    directLogistics: directLog,
-    returnTariff,
-    buyoutRate: buyoutInfo.rate,
-    buyoutPercent: buyoutInfo.percent,
-    buyoutSource: buyoutInfo.source,
-    returnCost,
     logistics: log,
     acquiring: acq,
-    commissionRate: c,
-    commissionSource,
-    drrRate: d,
-    priceBlocked,
     markup: {
       byCurrentPrice: mPrice,     // наценка по цене с акцией
-      byNoActionPrice: mNoAction, // по цене без акции
       byOldPrice: mOld,           // по зачёркнутой
-      byMinPrice: mMin,           // по ограничению для акций
-      targetRate: effTargetMarkup,
-      minRate: effMinMarkup,
-      source: targetCascade.source || minCascade.source
+      byMinPrice: mMin            // по ограничению для акций
     },
     price: {
-      current: curNum,
+      current: num(sku.price),
       target: target,             // цена при целевой наценке
       actionFloor: floor,         // ограничение для акций
-      breakEven: breakEven,       // безубыточность
-      targetRounded,
-      actionFloorRounded: floorRounded,
-      breakEvenRounded
+      breakEven: breakEven        // безубыточность
     },
-    taxes,
-    actionChecks,
     // запас цены — индикатор жизнеспособности (см. headroom)
     headroom: headroom(c, d),
 
     // флаги, которые в таблице были условным форматированием
-    warnings
+    warnings: [
+      !isFeasible(c, d)
+        ? 'комиссия и ДРР вместе забирают ' + r0((1 - headroom(c, d)) * 100) +
+          '% цены — расчёт формально верен, но цена выйдет нерыночной' : null,
+      (num(sku.minPrice) !== null && floor !== null && num(sku.minPrice) < floor)
+        ? 'min_price в Ozon ниже нашего ограничения для акций' : null,
+      (target !== null && num(sku.price) !== null && target > num(sku.price))
+        ? 'текущая цена ниже целевой' : null,
+      (mPrice !== null && num(sku.minMarkup) !== null && mPrice < num(sku.minMarkup))
+        ? 'фактическая наценка ниже минимально допустимой' : null
+    ].filter(Boolean)
   };
 }
 
 /**
  * Запас цены: какую долю цены продавца товар переживает после комиссии и ДРР.
  *   headroom = (1 − Комиссия) × (1 − ДРР)
+ * Это знаменатель прямого расчёта, и он же — главный индикатор жизнеспособности.
+ * headroom = 0.085 означает, что 91,5% цены забирают Ozon и реклама; чтобы
+ * отбить ленд-кост 311 ₽, цену придётся ставить около 7 100 ₽. Формула при этом
+ * формально корректна, а бизнес-смысла в результате нет — в SaaS с чужими данными
+ * такое будет постоянно, поэтому считаем это отдельным состоянием, а не ошибкой.
  */
 function headroom(commissionRate, drrRate) {
   const c = num(commissionRate), d = num(drrRate) || 0;
@@ -585,26 +216,18 @@ function isFeasible(commissionRate, drrRate) {
   return h !== null && h >= MIN_HEADROOM;
 }
 
+/** Пустое/''/undefined → null, иначе число. Строки с запятой как разделителем понимаем. */
 /** Округление до целого для человекочитаемых предупреждений. */
 function r0(v) { return Math.round(Number(v) || 0); }
 
-/** Пустое/''/undefined → null, иначе число. Строки с запятой как разделителем понимаем. */
 function num(v) {
-  if (v === null || v === undefined || v === '' || typeof v === 'boolean') return null;
+  if (v === null || v === undefined || v === '') return null;
   if (typeof v === 'number') return isFinite(v) ? v : null;
   const n = Number(String(v).replace(/\s/g, '').replace(',', '.'));
   return isFinite(n) ? n : null;
 }
 
 module.exports = {
-  toFractionRate,
-  resolveCommissionRate,
-  resolveBuyoutRate,
-  returnCostPerUnit,
-  resolveMarkupCascade,
-  roundPriceUp,
-  taxBreakdown,
-  checkActionConstraint,
   landCost, logisticsFbo, logisticsFbs,
   markupFromPrice, priceFromMarkup, actionFloor, breakEvenPrice, markupAtPrice,
   headroom, isFeasible, MIN_HEADROOM,
