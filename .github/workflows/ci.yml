@@ -39,12 +39,12 @@ jobs:
       - name: Доменное ядро (core/core.test.js)
         run: node core/core.test.js
 
-      - name: Стенд Apps Script (9 тестов)
+      - name: Стенд Apps Script (10 тестов)
         run: |
           set -e
           cd tests
           sh prepare.sh
-          for t in fact fact6 test_drr guard smoke schema negative comm7 log_sink; do
+          for t in fact fact6 test_drr guard smoke schema negative comm7 log_sink calculation; do
             echo "--- $t ---"
             TESTFILE=$t.js node all.js
           done
