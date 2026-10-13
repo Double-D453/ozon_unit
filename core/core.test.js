@@ -323,6 +323,31 @@ ok(actRes.actionChecks.length === 2 &&
    actRes.actionChecks[1].allowed === true,
    'Ограничения акций: наш пол (1307 ₽) выше лимита 1060 ₽ блокируется, а при лимите 1350 ₽ проходит');
 
+ok(ue.recommendedOldPrice(1195, 0.40, 1) === 1673 &&
+   ue.recommendedOldPrice(1370, 40, 10) === 1920,
+   'Рекомендованная зачёркнутая цена: +40% от целевой с округлением вверх по шагу B11');
+
+ok(ue.inferProductGroup('Mirka-Gold-150mm-P80-10', 'Круг шлифовальный') === 'Mirka' &&
+   ue.inferProductGroup('Kleiberit-Pur-501-1kg-1', 'Клей ПУР') === 'Kleiberit / Клеи' &&
+   ue.inferProductGroup('Кромка-Дуб-44мм-5м.п.', 'Кромка мебельная') === 'Кромка' &&
+   ue.inferProductGroup('Щит-Дуб-40х600', 'Мебельный щит') === 'Щит и брус',
+   'Товарные группы / бренды: корректная классификация Mirka, Kleiberit, Кромка, Щит и брус');
+
+const volSku = Object.assign({}, oakSku, {
+  offerId: 'Кромка-Дуб-44мм-5м.п.',
+  roundStep: 1,
+  oldPriceMarkup: 0.40,
+  deliveredUnits: 10,
+  salesRevenue: 17570
+});
+const volRes = ue.unitEconomics(volSku);
+ok(volRes.category === 'Кромка' &&
+   volRes.price.recommendedOldPrice === ue.roundPriceUp(1378 * 1.40, 1) &&
+   volRes.price.deltaRub === 1757 - 1378 &&
+   volRes.salesVolume.deliveredUnits === 10 &&
+   Math.abs(volRes.salesVolume.totalProfitBeforeTax - volRes.taxes.profitBeforeTax * 10) < 0.05,
+   'Объём продаж и комплект цен Э3: дельта цены, зачёркнутая цена и суммарная прибыль на объём продаж');
+
 // ============================================ ИТОГ
 console.log('\n' + '='.repeat(58));
 console.log('ПРОШЛО: ' + pass + '   ПРОВАЛЕНО: ' + fails.length);

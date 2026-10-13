@@ -204,6 +204,74 @@ function roundPriceUp(price, step) {
 }
 
 /**
+ * Расчёт рекомендованной зачёркнутой цены (old_price) от целевой цены
+ * по надбавке из Параметры!B15 (по умолчанию +40% = 0.40) с округлением вверх по шагу B11.
+ */
+function recommendedOldPrice(targetPrice, oldPriceMarkup, step) {
+  const t = num(targetPrice);
+  if (t === null || t <= 0) return null;
+  let m = toFractionRate(oldPriceMarkup);
+  if (m === null || m < 0) m = 0.40;
+  const raw = t * (1 + m);
+  const s = num(step);
+  return (s !== null && s > 0) ? roundPriceUp(raw, s) : raw;
+}
+
+/**
+ * Классификация артикула в понятную товарную группу / бренд по Offer id и названию.
+ * Используется для автозаполнения пустых ячеек «Номенклатура!P» (ручные значения не перезаписывает).
+ */
+function inferProductGroup(offerId, name) {
+  const oid = String(offerId === undefined || offerId === null ? '' : offerId).trim();
+  const nm = String(name === undefined || name === null ? '' : name).trim();
+  if (!oid && !nm) return '';
+  const o = oid.toLowerCase();
+  const s = (oid + ' ' + nm).toLowerCase();
+
+  if (o.indexOf('mirka') === 0 || o.indexOf('mirlon') === 0 || s.indexOf('mirka') !== -1) {
+    return 'Mirka';
+  }
+  if (o.indexOf('sunmight') === 0 || s.indexOf('sunmight') !== -1) {
+    return 'Sunmight';
+  }
+  if (o.indexOf('onelite') === 0 || o.indexOf('inret') === 0 || o.indexOf('поролоновые') === 0 ||
+      s.indexOf('шлифовальная губка') !== -1 || s.indexOf('круг шлифовальный') !== -1 ||
+      s.indexOf('полировальный круг') !== -1) {
+    return 'Onelite / Абразивы';
+  }
+  if (o.indexOf('кромка') === 0 || s.indexOf('кромка мебельная') !== -1 || s.indexOf('кромочная лента') !== -1) {
+    return 'Кромка';
+  }
+  if (o.indexOf('доска') === 0 || s.indexOf('разделочная доска') !== -1) {
+    return 'Доски разделочные';
+  }
+  if (o.indexOf('щит') === 0 || o.indexOf('мебельный') === 0 || o.indexOf('граб') === 0 ||
+      o.indexOf('брус') === 0 || s.indexOf('мебельный щит') !== -1 || s.indexOf('брусок') !== -1) {
+    return 'Щит и брус';
+  }
+  if (o.indexOf('kleiberit') === 0 || o.indexOf('клейберит') === 0 || o.indexOf('apel') === 0 ||
+      o.indexOf('нпи') === 0 || o.indexOf('купер') === 0 || o.indexOf('смола') === 0 ||
+      s.indexOf('клей') !== -1 || s.indexOf('клеевая нить') !== -1 || s.indexOf('смола') !== -1) {
+    return 'Kleiberit / Клеи';
+  }
+  if (o.indexOf('borma') === 0 || o.indexOf('шпак') === 0 || o.indexOf('масло') === 0 ||
+      o.indexOf('лак') === 0 || o.indexOf('растворитель') === 0 || o.indexOf('твердое') === 0 ||
+      o.indexOf('размягчитель') === 0 || o.indexOf('r1550') === 0 || o.indexOf('r1850') === 0 ||
+      s.indexOf('borma') !== -1 || s.indexOf('шпаклев') !== -1 || s.indexOf('масло') !== -1 ||
+      s.indexOf('растворитель') !== -1) {
+    return 'Borma / Масла и ЛКМ';
+  }
+  if (o.indexOf('duna') === 0 || o.indexOf('bianche') === 0 || o.indexOf('espresso') === 0 ||
+      o.indexOf('albero') === 0 || o.indexOf('crown') === 0 || o.indexOf('образец') === 0 ||
+      o.indexOf('каталог') === 0 || o.indexOf('венге') === 0 || o.indexOf('мдф') === 0 ||
+      o.indexOf('фанера') === 0 || s.indexOf('мультишпон') !== -1 || s.indexOf('шпон') !== -1 ||
+      s.indexOf('стеновые панели') !== -1 || s.indexOf('фанера') !== -1) {
+    return 'Шпон и панели';
+  }
+  return 'Инструмент и расходники';
+}
+
+/**
  * Налоговый блок (справочно, отдельно от доналоговой целевой цены):
  *   • неподтверждённый входящий НДС из цены НЕ вычитается;
  *   • выделенный НДС с продажи = P × vat / (1 + vat);
@@ -492,12 +560,33 @@ function unitEconomics(sku) {
   const targetRounded = (step !== null && step > 0) ? roundPriceUp(target, step) : target;
   const floorRounded = (step !== null && step > 0) ? roundPriceUp(floor, step) : floor;
   const breakEvenRounded = (step !== null && step > 0) ? roundPriceUp(breakEven, step) : breakEven;
+  const recOldPrice = !priceBlocked
+    ? recommendedOldPrice(targetRounded !== null ? targetRounded : target, sku.oldPriceMarkup, step)
+    : null;
 
   const curNum = num(curPriceVal);
+  const effectiveTarget = targetRounded !== null ? targetRounded : target;
+  const deltaRub = (!priceBlocked && curNum !== null && effectiveTarget !== null)
+    ? Math.round((curNum - effectiveTarget) * 100) / 100
+    : null;
+  const deltaPercent = (deltaRub !== null && effectiveTarget > 0)
+    ? Math.round((deltaRub / effectiveTarget) * 10000) / 100
+    : null;
+
   const profitBeforeTax = (!priceBlocked && curNum !== null)
     ? (curNum * (1 - c) * (1 - d) - log - acq - land)
     : null;
   const taxes = taxBreakdown(curNum, profitBeforeTax, sku.vatRate, sku.profitTaxRate);
+
+  const deliveredUnits = num(sku.deliveredUnits !== undefined ? sku.deliveredUnits : sku.orderedUnits);
+  const salesRevenue = num(sku.salesRevenue !== undefined ? sku.salesRevenue : sku.revenue);
+  const totalProfitBeforeTax = (profitBeforeTax !== null && deliveredUnits !== null && deliveredUnits >= 0)
+    ? Math.round(profitBeforeTax * deliveredUnits * 100) / 100
+    : null;
+
+  const effectiveCategory = (sku.category !== undefined && sku.category !== null && String(sku.category).trim() !== '')
+    ? String(sku.category).trim()
+    : inferProductGroup(sku.offerId, sku.name);
 
   const effectiveFloorForActions = floorRounded !== null ? floorRounded : floor;
   const actionChecks = Array.isArray(sku.actions)
@@ -526,6 +615,7 @@ function unitEconomics(sku) {
 
   return {
     ok: true,
+    category: effectiveCategory,
     landCost: land,
     directLogistics: directLog,
     returnTariff,
@@ -555,7 +645,15 @@ function unitEconomics(sku) {
       breakEven: breakEven,       // безубыточность
       targetRounded,
       actionFloorRounded: floorRounded,
-      breakEvenRounded
+      breakEvenRounded,
+      recommendedOldPrice: recOldPrice,
+      deltaRub,
+      deltaPercent
+    },
+    salesVolume: {
+      deliveredUnits: deliveredUnits !== null ? deliveredUnits : 0,
+      revenue: salesRevenue !== null ? salesRevenue : 0,
+      totalProfitBeforeTax
     },
     taxes,
     actionChecks,
@@ -603,6 +701,8 @@ module.exports = {
   returnCostPerUnit,
   resolveMarkupCascade,
   roundPriceUp,
+  recommendedOldPrice,
+  inferProductGroup,
   taxBreakdown,
   checkActionConstraint,
   landCost, logisticsFbo, logisticsFbs,

@@ -616,20 +616,23 @@ function fillNomCategory_(nom, info) {
     if (nom.getMaxColumns() < colIdx) return;
     const n = nom.getLastRow() - 1;
     if (n < 1) return;
-    const offers = nom.getRange(2, 1, n, 1).getValues();
+    const offers = nom.getRange(2, 1, n, 3).getValues();
     const curCats = nom.getRange(2, colIdx, n, 1).getValues();
 
     let filled = 0, haveCat = 0;
     const col = offers.map(function (r, idx) {
       const oid = String(r[0] === undefined || r[0] === null ? '' : r[0]).trim();
+      const name = String(r[2] === undefined || r[2] === null ? '' : r[2]).trim();
       const cur = (curCats[idx] && curCats[idx][0] !== undefined && curCats[idx][0] !== null)
         ? curCats[idx][0]
         : '';
       if (String(cur).trim() !== '') { haveCat++; return [cur]; }
       const cat = (info[oid] || {}).category_id;
-      if (cat === undefined || cat === null || String(cat).trim() === '') return [cur];
+      const fallbackGrp = typeof inferProductGroup_ === 'function' ? inferProductGroup_(oid, name || (info[oid] || {}).name || '') : '';
+      const resolved = (cat !== undefined && cat !== null && String(cat).trim() !== '') ? cat : fallbackGrp;
+      if (resolved === undefined || resolved === null || String(resolved).trim() === '') return [cur];
       filled++; haveCat++;
-      return [isNaN(Number(cat)) ? String(cat).trim() : Number(cat)];
+      return [isNaN(Number(resolved)) ? String(resolved).trim() : Number(resolved)];
     });
 
     if (!filled) return;
@@ -642,7 +645,7 @@ function fillNomCategory_(nom, info) {
       return;
     }
     nom.getRange(2, colIdx, n, 1).setValues(col);
-    logMsg_('INFO', 'Номенклатура: дозаполнено категорий (P) из API — ' + filled +
+    logMsg_('INFO', 'Номенклатура: дозаполнено категорий (P) — ' + filled +
       ' (всего с категорией: ' + haveCat + ' из ' + n + ')');
   } catch (e) {
     logMsg_('WARN', 'Номенклатура: не удалось дозаполнить категорию (P) — ' + e.message);
@@ -1687,7 +1690,8 @@ function formatCalcAlert_(res) {
   return [
     'Расчёт юнит-экономики (Э2/Э3) завершён (' + (res.updatedAt || '') + '):',
     '',
-    '• Всего артикулов в базе: ' + (res.total || 0),
+    '• Всего артикулов в базе: ' + (res.total || 0) +
+      ' (товарных групп: ' + (res.productGroupsCount || 0) + ')',
     '• Рассчитано цен: ' + (res.calculated || 0) +
       ' (пропущено без СС/кратности: ' + (res.skippedNoCost || 0) +
       ', блок при выкупе 0%: ' + (res.blockedZeroBuyout || 0) + ')',
@@ -1695,6 +1699,8 @@ function formatCalcAlert_(res) {
       ', из «Факт Ozon» — ' + (res.commFromFallback || 0),
     '• Выкуп: из «Продажи» — ' + (res.buyoutFromSales || 0) +
       ', по умолчанию (Параметры!B8) — ' + (res.buyoutFallback || 0),
+    '• Продажи за период: выкуплено ' + (res.totalDeliveredUnits || 0) +
+      ' шт (' + (res.skusWithSales || 0) + ' SKU), прибыль на объём: ' + (res.totalVolumeProfit || 0) + ' ₽',
     '• Наценка ниже минимальной: ' + (res.belowMinMarkup || 0) + ' SKU',
     '• Цена ниже целевой: ' + (res.belowTargetPrice || 0) + ' SKU',
     '• Акции (проверено строк: ' + (res.actionsChecked || 0) + '):',
@@ -1702,7 +1708,7 @@ function formatCalcAlert_(res) {
       (res.actionsBelowFloor ? ' (из них цена акции ниже нашего пола: ' + res.actionsBelowFloor + ')' : ''),
     '  — КОНФЛИКТ (наш пол > лимита Ozon): ' + (res.actionsBlocked || 0),
     '',
-    'Лист «Расчёт» (KPI-шапка, группы [+], светофор и фильтры) и контроль на листе «Акции» обновлены.'
+    'Листы «Расчёт» (46 кол., KPI-шапка, группы [+], светофор), «Акции» и «Проект» обновлены.'
   ].join('\n');
 }
 

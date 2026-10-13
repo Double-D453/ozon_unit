@@ -76,7 +76,13 @@ function calcHeaders_() {
     'НДС в цене, ₽',                   // 37 AK
     'Налог на прибыль, ₽',             // 38 AL
     'Статус акций',                    // 39 AM
-    'Статус / Предупреждения'          // 40 AN
+    'Статус / Предупреждения',         // 40 AN
+    'Реком. зачёркнутая цена, ₽',      // 41 AO (ОкрВверх(Целевая × (1 + B15), B11))
+    'Отклонение от целевой, ₽',        // 42 AP (Цена с акцией − Целевая цена)
+    'Отклонение от целевой, %',        // 43 AQ ((Цена с акцией − Целевая) / Целевая)
+    'Выкуплено за период, шт',         // 44 AR (из «Продажи» J/E)
+    'Выручка за период, ₽',            // 45 AS (из «Продажи» D)
+    'Прибыль на объём продаж, ₽'       // 46 AT (Прибыль до налогов × Выкуплено шт)
   ];
 }
 
@@ -118,8 +124,100 @@ function calcRoundUp_(price, step) {
 }
 
 /**
- * Чтение общих параметров расчёта с листа «Параметры» (B4..B14).
+ * Классификация артикула в понятную товарную группу / бренд по Offer id и названию.
+ * Используется для заполнения пустых ячеек «Номенклатура!P» (ручные значения не перезаписывает).
+ */
+function inferProductGroup_(offerId, name) {
+  const oid = String(offerId === undefined || offerId === null ? '' : offerId).trim();
+  const nm = String(name === undefined || name === null ? '' : name).trim();
+  if (!oid && !nm) return '';
+  const o = oid.toLowerCase();
+  const s = (oid + ' ' + nm).toLowerCase();
+
+  if (o.indexOf('mirka') === 0 || o.indexOf('mirlon') === 0 || s.indexOf('mirka') !== -1) {
+    return 'Mirka';
+  }
+  if (o.indexOf('sunmight') === 0 || s.indexOf('sunmight') !== -1) {
+    return 'Sunmight';
+  }
+  if (o.indexOf('onelite') === 0 || o.indexOf('inret') === 0 || o.indexOf('поролоновые') === 0 ||
+      s.indexOf('шлифовальная губка') !== -1 || s.indexOf('круг шлифовальный') !== -1 ||
+      s.indexOf('полировальный круг') !== -1) {
+    return 'Onelite / Абразивы';
+  }
+  if (o.indexOf('кромка') === 0 || s.indexOf('кромка мебельная') !== -1 || s.indexOf('кромочная лента') !== -1) {
+    return 'Кромка';
+  }
+  if (o.indexOf('доска') === 0 || s.indexOf('разделочная доска') !== -1) {
+    return 'Доски разделочные';
+  }
+  if (o.indexOf('щит') === 0 || o.indexOf('мебельный') === 0 || o.indexOf('граб') === 0 ||
+      o.indexOf('брус') === 0 || s.indexOf('мебельный щит') !== -1 || s.indexOf('брусок') !== -1) {
+    return 'Щит и брус';
+  }
+  if (o.indexOf('kleiberit') === 0 || o.indexOf('клейберит') === 0 || o.indexOf('apel') === 0 ||
+      o.indexOf('нпи') === 0 || o.indexOf('купер') === 0 || o.indexOf('смола') === 0 ||
+      s.indexOf('клей') !== -1 || s.indexOf('клеевая нить') !== -1 || s.indexOf('смола') !== -1) {
+    return 'Kleiberit / Клеи';
+  }
+  if (o.indexOf('borma') === 0 || o.indexOf('шпак') === 0 || o.indexOf('масло') === 0 ||
+      o.indexOf('лак') === 0 || o.indexOf('растворитель') === 0 || o.indexOf('твердое') === 0 ||
+      o.indexOf('размягчитель') === 0 || o.indexOf('r1550') === 0 || o.indexOf('r1850') === 0 ||
+      s.indexOf('borma') !== -1 || s.indexOf('шпаклев') !== -1 || s.indexOf('масло') !== -1 ||
+      s.indexOf('растворитель') !== -1) {
+    return 'Borma / Масла и ЛКМ';
+  }
+  if (o.indexOf('duna') === 0 || o.indexOf('bianche') === 0 || o.indexOf('espresso') === 0 ||
+      o.indexOf('albero') === 0 || o.indexOf('crown') === 0 || o.indexOf('образец') === 0 ||
+      o.indexOf('каталог') === 0 || o.indexOf('венге') === 0 || o.indexOf('мдф') === 0 ||
+      o.indexOf('фанера') === 0 || s.indexOf('мультишпон') !== -1 || s.indexOf('шпон') !== -1 ||
+      s.indexOf('стеновые панели') !== -1 || s.indexOf('фанера') !== -1) {
+    return 'Шпон и панели';
+  }
+  return 'Инструмент и расходники';
+}
+
+/**
+ * Дозаполняет только ПУСТЫЕ ячейки колонки P («Категория») в «Номенклатуре»
+ * понятными товарными группами/брендами. Существующие значения не перезаписывает.
+ */
+function fillEmptyNomProductGroups_(nom) {
+  if (!nom) return 0;
+  try {
+    const last = nom.getLastRow();
+    if (last < 2) return 0;
+    const n = last - 1;
+    const colIdx = CFG.NOM_COL_CAT || 16;
+    const offers = nom.getRange(2, 1, n, 3).getValues();
+    const curCats = nom.getRange(2, colIdx, n, 1).getValues();
+    const formulas = nom.getRange(2, colIdx, n, 1).getFormulas();
+    if (formulas.some(function (r) { return String(r[0] || '') !== ''; })) return 0;
+
+    let filled = 0;
+    const out = offers.map(function (r, i) {
+      const cur = curCats[i][0];
+      if (cur !== '' && cur !== null && cur !== undefined) return [cur];
+      const grp = inferProductGroup_(r[0], r[2]);
+      if (!grp) return [''];
+      filled++;
+      return [grp];
+    });
+    if (filled > 0) {
+      if (String(nom.getRange(1, colIdx).getValue() || '').trim() === '') {
+        nom.getRange(1, colIdx).setValue('Категория (товарная группа)').setFontWeight('bold');
+      }
+      nom.getRange(2, colIdx, n, 1).setValues(out);
+    }
+    return filled;
+  } catch (e) {
+    return 0;
+  }
+}
+
+/**
+ * Чтение общих параметров расчёта с листа «Параметры» (B4..B15).
  * ВАЖНО: Параметры!B14 никогда не модифицируется калькулятором.
+ * Если строки 15 («Надбавка для зачёркнутой цены») ещё нет — мягко добавляет её со значением 40%.
  */
 function readCalcParams_() {
   const defaults = {
@@ -133,7 +231,8 @@ function readCalcParams_() {
     roundStep: 1,
     warehouse: 'МСК',
     scheme: 'Авто',
-    commissionDiscount: CFG.COMMISSION_DISCOUNT_DEFAULT
+    commissionDiscount: CFG.COMMISSION_DISCOUNT_DEFAULT,
+    oldPriceMarkup: CFG.OLD_PRICE_MARKUP_DEFAULT !== undefined ? CFG.OLD_PRICE_MARKUP_DEFAULT : 0.40
   };
 
   const par = ss_().getSheetByName('Параметры');
@@ -141,6 +240,7 @@ function readCalcParams_() {
 
   const last = par.getLastRow();
   const rows = par.getRange(1, 1, last, 2).getValues();
+  let hasOldPriceMarkupRow = false;
   rows.forEach(function (r, idx) {
     const label = String(r[0] || '').trim();
     const val = r[1];
@@ -176,8 +276,25 @@ function readCalcParams_() {
     } else if (/скидка к комиссии/i.test(label) || idx === 13) {
       const n = calcNum_(val);
       if (n !== null && n >= 0) defaults.commissionDiscount = n;
+    } else if (/зачёркнут|зачеркнут/i.test(label) || idx === 14) {
+      hasOldPriceMarkupRow = true;
+      const f = calcToFraction_(val);
+      if (f !== null && f >= 0) defaults.oldPriceMarkup = f;
     }
   });
+
+  if (!hasOldPriceMarkupRow && last >= 14) {
+    try {
+      const targetRow = last + 1;
+      if (par.getMaxRows() < targetRow) par.insertRowsAfter(par.getMaxRows(), targetRow - par.getMaxRows());
+      par.getRange(targetRow, 1, 1, 3).setValues([[
+        'Надбавка для зачёркнутой цены (от целевой)',
+        defaults.oldPriceMarkup,
+        'Рекомендованная зачёркнутая цена = ОкрВверх(Целевая цена × (1 + надбавка), шаг B11). По умолчанию +40% (0,40).'
+      ]]);
+      par.getRange(targetRow, 2).setNumberFormat('0%');
+    } catch (e) {}
+  }
 
   return defaults;
 }
@@ -545,16 +662,19 @@ function calculateUnitEconomics() {
       actByOffer[oid].push({ rowIndex: idx, row: r });
     });
 
-    // --- 6. Читаем «Номенклатуру» и считаем каждый SKU ---
+    // --- 6. Автозаполнение пустых ячеек «Номенклатура!P» товарными группами и чтение строк ---
+    const filledGroups = fillEmptyNomProductGroups_(nom);
     const nomCols = Math.max(nom.getMaxColumns(), CFG.NOM_COLS);
     const nomRows = nom.getRange(2, 1, nom.getLastRow() - 1, nomCols).getValues();
 
     const calcRows = [];
     const skuContextByOffer = {};
+    const groupCounts = {};
     let calculated = 0, skippedNoCost = 0, skippedNoFact = 0, blockedZeroBuyout = 0;
     let commFromFact = 0, commFromFallback = 0;
     let buyoutFromSales = 0, buyoutFallback = 0;
     let belowMinMarkup = 0, belowTargetPrice = 0, actionConflicts = 0;
+    let totalDeliveredUnits = 0, totalSalesRevenue = 0, totalVolumeProfit = 0, skusWithSales = 0;
 
     nomRows.forEach(function (nr) {
       const oid = String(nr[0] === undefined || nr[0] === null ? '' : nr[0]).trim();
@@ -569,8 +689,13 @@ function calculateUnitEconomics() {
       const packaging = calcNum_(packagingRaw) || 0;
       const nomStockFbo = calcNum_(nr[11]); // L
       const nomScheme = String(nr[13] || '').trim().toUpperCase(); // N
-      const category = nr[15] !== undefined && nr[15] !== null ? String(nr[15]).trim() : ''; // P
+      const rawCategory = nr[15] !== undefined && nr[15] !== null ? String(nr[15]).trim() : ''; // P
+      const category = rawCategory !== '' ? rawCategory : inferProductGroup_(oid, name);
       const syncFlag = nr[16] !== undefined && nr[16] !== null ? String(nr[16]).trim() : ''; // Q
+
+      if (category) {
+        groupCounts[category] = (groupCounts[category] || 0) + 1;
+      }
 
       const warnings = [];
       const errors = [];
@@ -645,13 +770,23 @@ function calculateUnitEconomics() {
       if (directLogistics === null) errors.push('нет логистики ' + scheme);
       if (curPrice === null || curPrice <= 0) errors.push('нет цены в Ozon');
 
-      // Выкуп из Продажи!M
+      // Выкуп из Продажи!M + объём продаж (Продажи!J доставлено / E выкуплено, D выручка)
       const sRow = salesByOffer[oid] || (sku ? salesBySku[sku] : null) || null;
       const salesBuyoutRaw = sRow ? sRow[12] : '';
       const buyoutInfo = resolveItemBuyout_(salesBuyoutRaw, params.buyoutDefault);
       if (buyoutInfo.warning) warnings.push(buyoutInfo.warning);
       if (buyoutInfo.source === 'Продажи!M') buyoutFromSales++;
       else buyoutFallback++;
+
+      const delivRaw = sRow ? (calcNum_(sRow[9]) !== null ? calcNum_(sRow[9]) : calcNum_(sRow[4])) : null;
+      const deliveredUnits = delivRaw !== null && delivRaw > 0 ? Math.round(delivRaw) : 0;
+      const revRaw = sRow ? calcNum_(sRow[3]) : null;
+      const salesRevenue = revRaw !== null && revRaw > 0 ? revRaw : 0;
+      if (deliveredUnits > 0 || salesRevenue > 0) {
+        skusWithSales++;
+        totalDeliveredUnits += deliveredUnits;
+        totalSalesRevenue += salesRevenue;
+      }
 
       // Комиссия: сначала Комиссия факт!J, иначе Факт Ozon!W/X
       const cRow = commByOffer[oid] || (sku ? commBySku[sku] : null) || null;
@@ -720,7 +855,13 @@ function calculateUnitEconomics() {
           '', '', '', '',
           '', '', '',
           (actByOffer[oid] && actByOffer[oid].length) ? 'БЛОК: нет расчёта по SKU' : '—',
-          statusStr
+          statusStr,
+          '',
+          '',
+          '',
+          deliveredUnits > 0 ? deliveredUnits : 0,
+          salesRevenue > 0 ? calcRound2_(salesRevenue) : 0,
+          ''
         ]);
         return;
       }
@@ -758,6 +899,18 @@ function calculateUnitEconomics() {
       const beRounded = calcRoundUp_(beRaw, params.roundStep);
       const floorRounded = calcRoundUp_(floorRaw, params.roundStep);
       const targetRounded = calcRoundUp_(targetRaw, params.roundStep);
+      const oldMarkup = (params.oldPriceMarkup !== undefined && params.oldPriceMarkup !== null)
+        ? params.oldPriceMarkup
+        : (CFG.OLD_PRICE_MARKUP_DEFAULT !== undefined ? CFG.OLD_PRICE_MARKUP_DEFAULT : 0.40);
+      const recommendedOldRounded = (!priceBlocked && targetRounded !== null && targetRounded > 0)
+        ? calcRoundUp_(targetRounded * (1 + oldMarkup), params.roundStep)
+        : null;
+      const deltaRub = (!priceBlocked && curPrice !== null && curPrice > 0 && targetRounded !== null)
+        ? (curPrice - targetRounded)
+        : null;
+      const deltaPct = (deltaRub !== null && targetRounded !== null && targetRounded > 0)
+        ? Math.round((deltaRub / targetRounded) * 10000) / 100
+        : null;
 
       const profitBeforeTax = (!priceBlocked && curPrice !== null && curPrice > 0)
         ? (curPrice * h - totalLogistics - acq - land)
@@ -768,6 +921,12 @@ function calculateUnitEconomics() {
       const profitTax = (profitBeforeTax !== null && profitBeforeTax > 0 && params.profitTaxRate > 0)
         ? (profitBeforeTax * params.profitTaxRate)
         : 0;
+      const volumeProfit = (profitBeforeTax !== null)
+        ? (deliveredUnits > 0 ? profitBeforeTax * deliveredUnits : 0)
+        : null;
+      if (volumeProfit !== null && deliveredUnits > 0) {
+        totalVolumeProfit += volumeProfit;
+      }
 
       if (mCur !== null && mCur < markups.minMarkup) {
         belowMinMarkup++;
@@ -855,7 +1014,13 @@ function calculateUnitEconomics() {
         calcRound2_(vatAmount),
         calcRound2_(profitTax),
         actSummary,
-        statusText
+        statusText,
+        recommendedOldRounded !== null ? calcRound2_(recommendedOldRounded) : '',
+        deltaRub !== null ? calcRound2_(deltaRub) : '',
+        deltaPct !== null ? deltaPct : '',
+        deliveredUnits,
+        calcRound2_(salesRevenue),
+        volumeProfit !== null ? calcRound2_(volumeProfit) : ''
       ]);
     });
 
@@ -913,6 +1078,12 @@ function calculateUnitEconomics() {
       actionsAllowed: actAllowed,
       actionsBelowFloor: actBelowFloor,
       actionsBlocked: actBlocked,
+      filledProductGroups: filledGroups,
+      productGroupsCount: Object.keys(groupCounts).length,
+      skusWithSales: skusWithSales,
+      totalDeliveredUnits: totalDeliveredUnits,
+      totalSalesRevenue: Math.round(totalSalesRevenue * 100) / 100,
+      totalVolumeProfit: Math.round(totalVolumeProfit * 100) / 100,
       updatedAt: today
     };
 
@@ -938,7 +1109,8 @@ function calculateUnitEconomics() {
     }
 
     styleCalcSheet_(calcSh, calcRows, summary, params);
-    styleCalcSettingsSheet_(ss.getSheetByName(CFG.SHEETS.CALC_SETTINGS));
+    styleCalcSettingsSheet_(ss.getSheetByName(CFG.SHEETS.CALC_SETTINGS), groupCounts);
+    refreshProjectSheet_(ss, summary, params);
     organizeWorkbookTabs_(ss);
 
     logMsg_('INFO', 'Расчёт Э2/Э3 завершён: всего SKU ' + calcRows.length +
@@ -946,6 +1118,7 @@ function calculateUnitEconomics() {
       ', пропущено без СС/кратности ' + skippedNoCost +
       ', заблокировано (выкуп 0%) ' + blockedZeroBuyout +
       '. Комиссия: из «Комиссия факт» ' + commFromFact + ', из «Факт Ozon» ' + commFromFallback +
+      '. Продажи: выкуплено ' + totalDeliveredUnits + ' шт, прибыль на объём ' + Math.round(totalVolumeProfit) + ' ₽' +
       '. Акции: строк проверено ' + actChecked + ' (проходят ' + actAllowed + ', конфликт/блок ' + actBlocked + ').');
 
     recalc_();
@@ -961,10 +1134,10 @@ function calculateUnitEconomics() {
 // =====================================================================
 
 /**
- * Формирует 3 строки верхней закреплённой KPI-панели на листе «Расчёт» (40 колонок).
- * ВАЖНО: все подписи и значения размещаются в 15 главных колонках, которые остаются
- * видимыми при свёрнутых группах [+]: A(0), B(1), C(2), E(4), I(8), O(14), Q(16),
- * U(20), Y(24), AF(31), AG(32), AI(34), AJ(35), AM(38), AN(39).
+ * Формирует 3 строки верхней закреплённой KPI-панели на листе «Расчёт» (46 колонок).
+ * ВАЖНО: все подписи и значения размещаются в главных колонках, которые остаются
+ * видимыми при свёрнутых группах [+]: A(0), B(1), C(2), D(3), E(4), I(8), O(14), Q(16),
+ * U(20), Y(24), AF(31), AG(32), AI(34), AJ(35), AM(38), AN(39), AO(40), AP(41), AT(45).
  */
 function buildCalcKpiBanner_(summary, params) {
   const r1 = new Array(CFG.CALC_COLS).fill('');
@@ -976,11 +1149,13 @@ function buildCalcKpiBanner_(summary, params) {
   const defBuyoutPct = Math.round((params.buyoutDefault || 0) * 10000) / 100;
   const minMpPct = Math.round((params.minMarkup || 0) * 10000) / 100;
   const tgtMpPct = Math.round((params.targetMarkup || 0) * 10000) / 100;
+  const oldMpPct = Math.round(((params.oldPriceMarkup !== undefined ? params.oldPriceMarkup : 0.40) || 0) * 10000) / 100;
 
   // Строка 1 — заголовки KPI-плашек
   r1[0]  = '📊 ЮНИТ-ЭКОНОМИКА И ЦЕНЫ (Э2/Э3)';
   r1[1]  = 'Всего SKU';
   r1[2]  = 'Покрытие базы (в расчёте / без СС / блок 0%)';
+  r1[3]  = 'Товарных групп';
   r1[4]  = 'Схема';
   r1[8]  = 'Выкуп (Продажи / B8)';
   r1[14] = 'База ДРР / Выкуп';
@@ -993,6 +1168,9 @@ function buildCalcKpiBanner_(summary, params) {
   r1[35] = 'Акции ОК / Ниже пола';
   r1[38] = 'Конфликт лимита Ozon';
   r1[39] = 'Обновлено';
+  r1[40] = 'Правило зачёркн. цены';
+  r1[41] = 'Выкуплено за период, шт';
+  r1[45] = 'Прибыль на объём, ₽';
 
   // Строка 2 — значения KPI-плашек
   r2[0]  = 'Сводка по магазину';
@@ -1000,6 +1178,7 @@ function buildCalcKpiBanner_(summary, params) {
   r2[2]  = 'Рассчитано: ' + (summary.calculated || 0) +
            '  |  Без СС: ' + (summary.skippedNoCost || 0) +
            '  |  Блок (0%): ' + (summary.blockedZeroBuyout || 0);
+  r2[3]  = summary.productGroupsCount || 0;
   r2[4]  = String(params.scheme || 'Авто');
   r2[8]  = (summary.buyoutFromSales || 0) + ' / ' + (summary.buyoutFallback || 0);
   r2[14] = 'ДРР ' + drrPct + '% | Выкуп ' + defBuyoutPct + '%';
@@ -1012,14 +1191,18 @@ function buildCalcKpiBanner_(summary, params) {
   r2[35] = (summary.actionsAllowed || 0) + ' ОК / ' + (summary.actionsBelowFloor || 0) + ' ниже пола';
   r2[38] = summary.actionsBlocked || 0;
   r2[39] = summary.updatedAt || '';
+  r2[40] = '+' + oldMpPct + '% к целевой (B15)';
+  r2[41] = (summary.totalDeliveredUnits || 0) + ' шт (' + (summary.skusWithSales || 0) + ' SKU)';
+  r2[45] = summary.totalVolumeProfit !== undefined ? calcRound2_(summary.totalVolumeProfit) : 0;
 
   // Строка 3 — подсказка по навигации и легенда светофора
   r3[0]  = '💡 Раскройте [+] над столбцами для деталей затрат и налогов';
-  r3[2]  = 'Фильтр [▼] в строке 4 позволяет отобрать убыточные SKU или конфликты акций';
+  r3[2]  = 'Фильтр [▼] в строке 4 позволяет отобрать группу (D), убыточные SKU или конфликты акций';
   r3[20] = '🟢 Зелёный: наценка ≥ цели, акция ОК';
   r3[24] = '🟡 Жёлтый: ниже цели или ниже нашего пола';
   r3[38] = '🔴 Красный: убыток (<0%) или пол > лимита Ozon';
   r3[39] = '⚪ Серый: нет СС/кратности в 1С';
+  r3[41] = 'Раскройте [+] справа от AP для % отклонения и выручки';
 
   return [r1, r2, r3];
 }
@@ -1041,7 +1224,7 @@ function resetSheetFilter_(sh, headerRow, totalRows, numCols) {
 
 /**
  * Настраивает сворачиваемые группы колонок [+/-] на листе «Расчёт».
- * В свёрнутом состоянии остаются 15 главных управленческих колонок на один экран.
+ * В свёрнутом состоянии остаются главные управленческие колонки на один экран.
  */
 function setupCalcColumnGroups_(sh) {
   if (!sh || typeof sh.getRange !== 'function') return;
@@ -1113,6 +1296,7 @@ function styleCalcSheet_(sh, calcRows, summary, params) {
   topBgs[0][0] = '#1e8e3e'; topFcs[0][0] = '#ffffff';
   topBgs[1][0] = '#e6f4ea'; topFcs[1][0] = '#137333';
   topBgs[1][2] = '#f8f9fa'; topFcs[1][2] = '#202124';
+  topBgs[1][3] = '#e8f0fe'; topFcs[1][3] = '#1967d2';
   topBgs[1][20] = '#e6f4ea'; topFcs[1][20] = '#137333';
   topBgs[1][24] = (summary && summary.belowMinMarkup > 0) ? '#fce8e6' : '#e6f4ea';
   topFcs[1][24] = (summary && summary.belowMinMarkup > 0) ? '#c5221f' : '#137333';
@@ -1122,13 +1306,20 @@ function styleCalcSheet_(sh, calcRows, summary, params) {
   topFcs[1][35] = (summary && summary.actionsBelowFloor > 0) ? '#b06000' : '#137333';
   topBgs[1][38] = (summary && summary.actionsBlocked > 0) ? '#fce8e6' : '#e6f4ea';
   topFcs[1][38] = (summary && summary.actionsBlocked > 0) ? '#c5221f' : '#137333';
+  topBgs[1][40] = '#ede7f6'; topFcs[1][40] = '#4a235a';
+  topBgs[1][41] = '#e8f0fe'; topFcs[1][41] = '#1967d2';
+  topBgs[1][45] = (summary && summary.totalVolumeProfit < 0) ? '#fce8e6' : '#e6f4ea';
+  topFcs[1][45] = (summary && summary.totalVolumeProfit < 0) ? '#c5221f' : '#137333';
 
-  // Цветовое кодирование 6 смысловых блоков в строке 4 (шапка таблицы)
-  const primaryCols = { 0:1, 1:1, 2:1, 4:1, 8:1, 14:1, 16:1, 20:1, 24:1, 31:1, 32:1, 34:1, 35:1, 38:1, 39:1 };
+  // Цветовое кодирование 7 смысловых блоков в строке 4 (шапка таблицы)
+  const primaryCols = {
+    0:1, 1:1, 2:1, 3:1, 4:1, 8:1, 14:1, 16:1, 20:1, 24:1,
+    31:1, 32:1, 34:1, 35:1, 38:1, 39:1, 40:1, 41:1, 45:1
+  };
   for (let c = 0; c < cols; c++) {
     const isPrim = Boolean(primaryCols[c]);
     if (c <= 4) {
-      topBgs[3][c] = isPrim ? '#202124' : '#3c4043'; // Блок 1: Товар и схема
+      topBgs[3][c] = isPrim ? '#202124' : '#3c4043'; // Блок 1: Товар, группа и схема
     } else if (c <= 19) {
       topBgs[3][c] = isPrim ? '#1f4e79' : '#2e6da4'; // Блок 2: Затраты, логистика, комиссия
     } else if (c <= 27) {
@@ -1137,8 +1328,10 @@ function styleCalcSheet_(sh, calcRows, summary, params) {
       topBgs[3][c] = isPrim ? '#4a235a' : '#6c3483'; // Блок 4: Каскад и расчётные цены (Э3)
     } else if (c <= 37) {
       topBgs[3][c] = isPrim ? '#7e5109' : '#9c640c'; // Блок 5: Прибыль и налоги ОСНО
-    } else {
+    } else if (c <= 39) {
       topBgs[3][c] = '#263238';                      // Блок 6: Контроль акций и статус
+    } else {
+      topBgs[3][c] = isPrim ? '#1b4f72' : '#2874a6'; // Блок 7: Реком. old_price, дельта и объём продаж
     }
   }
 
@@ -1164,48 +1357,54 @@ function styleCalcSheet_(sh, calcRows, summary, params) {
     const fcs = new Array(n);
     const fws = new Array(n);
 
-    // Шаблон числовых форматов на 1 строку из 40 колонок
+    // Шаблон числовых форматов на 1 строку из 46 колонок
     const fmtRow = [
-      '@',        // 1 A: Offer id
-      '0',        // 2 B: SKU (без экспоненты!)
-      '@',        // 3 C: Наименование
-      '0',        // 4 D: Категория
-      '@',        // 5 E: Схема
-      '#,##0.00', // 6 F: СС за ед.
-      '0.###',    // 7 G: Кратность
-      '#,##0.00', // 8 H: Упаковка
-      '#,##0.00', // 9 I: Ленд-кост
-      '#,##0.00', // 10 J: Логистика прямая
-      '#,##0.00', // 11 K: Тариф возврата
-      '0.00"%"',  // 12 L: Выкуп, %
-      '@',        // 13 M: Источник выкупа
-      '#,##0.00', // 14 N: Возвраты на 1 выкуп., ₽
-      '#,##0.00', // 15 O: Логистика с возвратами, ₽
-      '#,##0.00', // 16 P: Эквайринг, ₽
-      '0.00"%"',  // 17 Q: Комиссия, %
-      '@',        // 18 R: Источник комиссии
-      '0.00"%"',  // 19 S: ДРР, %
-      '0.00"%"',  // 20 T: Запас цены, %
-      '#,##0',    // 21 U: Цена с акцией, ₽
-      '#,##0',    // 22 V: Цена без акции, ₽
-      '#,##0',    // 23 W: Зачёркнутая цена, ₽
-      '#,##0',    // 24 X: min_price Ozon, ₽
-      '0.00"%"',  // 25 Y: Наценка по цене с акцией, %
-      '0.00"%"',  // 26 Z: Наценка по цене без акции, %
-      '0.00"%"',  // 27 AA: Наценка по зачёркнутой цене, %
-      '0.00"%"',  // 28 AB: Наценка по min_price, %
-      '0.00"%"',  // 29 AC: Мин. наценка, %
-      '0.00"%"',  // 30 AD: Целевая наценка, %
-      '@',        // 31 AE: Источник наценки
-      '#,##0',    // 32 AF: Безубыточность, ₽
-      '#,##0',    // 33 AG: Ограничение для акций (наш пол), ₽
-      '#,##0.00', // 34 AH: Целевая цена (до окр.), ₽
-      '#,##0',    // 35 AI: Целевая цена, ₽
-      '#,##0.00', // 36 AJ: Прибыль до налогов, ₽
-      '#,##0.00', // 37 AK: НДС в цене, ₽
-      '#,##0.00', // 38 AL: Налог на прибыль, ₽
-      '@',        // 39 AM: Статус акций
-      '@'         // 40 AN: Статус / Предупреждения
+      '@',               // 1 A: Offer id
+      '0',               // 2 B: SKU (без экспоненты!)
+      '@',               // 3 C: Наименование
+      '@',               // 4 D: Категория (товарная группа)
+      '@',               // 5 E: Схема
+      '#,##0.00',        // 6 F: СС за ед.
+      '0.###',           // 7 G: Кратность
+      '#,##0.00',        // 8 H: Упаковка
+      '#,##0.00',        // 9 I: Ленд-кост
+      '#,##0.00',        // 10 J: Логистика прямая
+      '#,##0.00',        // 11 K: Тариф возврата
+      '0.00"%"',         // 12 L: Выкуп, %
+      '@',               // 13 M: Источник выкупа
+      '#,##0.00',        // 14 N: Возвраты на 1 выкуп., ₽
+      '#,##0.00',        // 15 O: Логистика с возвратами, ₽
+      '#,##0.00',        // 16 P: Эквайринг, ₽
+      '0.00"%"',         // 17 Q: Комиссия, %
+      '@',               // 18 R: Источник комиссии
+      '0.00"%"',         // 19 S: ДРР, %
+      '0.00"%"',         // 20 T: Запас цены, %
+      '#,##0',           // 21 U: Цена с акцией, ₽
+      '#,##0',           // 22 V: Цена без акции, ₽
+      '#,##0',           // 23 W: Зачёркнутая цена, ₽
+      '#,##0',           // 24 X: min_price Ozon, ₽
+      '0.00"%"',         // 25 Y: Наценка по цене с акцией, %
+      '0.00"%"',         // 26 Z: Наценка по цене без акции, %
+      '0.00"%"',         // 27 AA: Наценка по зачёркнутой цене, %
+      '0.00"%"',         // 28 AB: Наценка по min_price, %
+      '0.00"%"',         // 29 AC: Мин. наценка, %
+      '0.00"%"',         // 30 AD: Целевая наценка, %
+      '@',               // 31 AE: Источник наценки
+      '#,##0',           // 32 AF: Безубыточность, ₽
+      '#,##0',           // 33 AG: Ограничение для акций (наш пол), ₽
+      '#,##0.00',        // 34 AH: Целевая цена (до окр.), ₽
+      '#,##0',           // 35 AI: Целевая цена, ₽
+      '#,##0.00',        // 36 AJ: Прибыль до налогов, ₽
+      '#,##0.00',        // 37 AK: НДС в цене, ₽
+      '#,##0.00',        // 38 AL: Налог на прибыль, ₽
+      '@',               // 39 AM: Статус акций
+      '@',               // 40 AN: Статус / Предупреждения
+      '#,##0',           // 41 AO: Реком. зачёркнутая цена, ₽
+      '+#,##0;-#,##0;0', // 42 AP: Отклонение от целевой, ₽
+      '0.00"%"',         // 43 AQ: Отклонение от целевой, %
+      '#,##0',           // 44 AR: Выкуплено за период, шт
+      '#,##0.00',        // 45 AS: Выручка за период, ₽
+      '#,##0.00'         // 46 AT: Прибыль на объём продаж, ₽
     ];
     const fmts = new Array(n);
 
@@ -1226,12 +1425,13 @@ function styleCalcSheet_(sh, calcRows, summary, params) {
         rowBg[39] = '#e8eaed';
         rowFc[39] = '#5f6368';
       } else {
-        // Выделяем ключевые расчётные колонки (Ленд-кост, Логистика с возвр., Наш пол, Целевая цена)
+        // Выделяем ключевые расчётные колонки (Ленд-кост, Логистика с возвр., Наш пол, Целевая цена, Реком. old_price)
         rowFw[0]  = 'bold';
         rowFw[8]  = 'bold';
         rowFw[14] = 'bold';
         rowBg[32] = '#f3e8fd'; rowFc[32] = '#4a235a'; rowFw[32] = 'bold'; // AG: Наш пол акций
         rowBg[34] = '#ede7f6'; rowFc[34] = '#311b92'; rowFw[34] = 'bold'; // AI: Целевая цена
+        rowBg[40] = '#f3e8fd'; rowFc[40] = '#4a235a'; rowFw[40] = 'bold'; // AO: Реком. зачёркнутая цена
 
         // Схема FBO / FBS
         if (r[4] === 'FBO') {
@@ -1252,6 +1452,9 @@ function styleCalcSheet_(sh, calcRows, summary, params) {
           const floorP = calcNum_(r[32]);
           const targetP = calcNum_(r[34]);
           const profit = calcNum_(r[35]);
+          const deltaRub = calcNum_(r[41]);
+          const volUnits = calcNum_(r[43]);
+          const volProfit = calcNum_(r[45]);
 
           // Светофор для текущей цены (U) относительно пола и целевой цены
           if (curPrice !== null && floorP !== null && curPrice < floorP) {
@@ -1276,13 +1479,35 @@ function styleCalcSheet_(sh, calcRows, summary, params) {
             }
           }
 
-          // Светофор для прибыли до налогов (AJ)
+          // Светофор для прибыли до налогов на 1 ед. (AJ)
           if (profit !== null) {
             rowFw[35] = 'bold';
             if (profit < 0) {
               rowBg[35] = '#fce8e6'; rowFc[35] = '#c5221f';
             } else if (profit > 0) {
               rowBg[35] = '#e6f4ea'; rowFc[35] = '#137333';
+            }
+          }
+
+          // Светофор для отклонения цены от целевой (AP)
+          if (deltaRub !== null) {
+            rowFw[41] = 'bold';
+            if (curPrice !== null && floorP !== null && curPrice < floorP) {
+              rowBg[41] = '#fce8e6'; rowFc[41] = '#c5221f';
+            } else if (deltaRub < 0) {
+              rowBg[41] = '#fef7e0'; rowFc[41] = '#b06000';
+            } else {
+              rowBg[41] = '#e6f4ea'; rowFc[41] = '#137333';
+            }
+          }
+
+          // Светофор для прибыли на объём продаж (AT)
+          if (volProfit !== null && volUnits !== null && volUnits > 0) {
+            rowFw[45] = 'bold';
+            if (volProfit < 0) {
+              rowBg[45] = '#fce8e6'; rowFc[45] = '#c5221f';
+            } else if (volProfit > 0) {
+              rowBg[45] = '#e6f4ea'; rowFc[45] = '#137333';
             }
           }
 
@@ -1323,6 +1548,7 @@ function styleCalcSheet_(sh, calcRows, summary, params) {
     1: 165,  // A: Offer id
     2: 105,  // B: SKU
     3: 270,  // C: Наименование
+    4: 155,  // D: Категория (товарная группа)
     5: 68,   // E: Схема
     9: 105,  // I: Ленд-кост, ₽
     15: 120, // O: Логистика с возвратами, ₽
@@ -1334,7 +1560,10 @@ function styleCalcSheet_(sh, calcRows, summary, params) {
     35: 115, // AI: Целевая цена, ₽
     36: 115, // AJ: Прибыль до налогов, ₽
     39: 210, // AM: Статус акций
-    40: 340  // AN: Статус / Предупреждения
+    40: 340, // AN: Статус / Предупреждения
+    41: 125, // AO: Реком. зачёркнутая цена, ₽
+    42: 120, // AP: Отклонение от целевой, ₽
+    46: 135  // AT: Прибыль на объём продаж, ₽
   };
   Object.keys(widths).forEach(function (colKey) {
     try { sh.setColumnWidth(Number(colKey), widths[colKey]); } catch (e) {}
@@ -1436,9 +1665,9 @@ function styleActionsSheet_(sh, actRows) {
 /**
  * UX/UI оформление листа «Настройки расчёта»:
  * - шапка A1:E1 в синем стиле настроек;
- * - памятка с правилами каскада и примерами заполнения справа в колонках G1:H9.
+ * - памятка с правилами каскада и живым справочником товарных групп справа в колонках G:H.
  */
-function styleCalcSettingsSheet_(sh) {
+function styleCalcSettingsSheet_(sh, groupCounts) {
   if (!sh) return;
   try { sh.setFrozenRows(1); } catch (e) {}
 
@@ -1448,24 +1677,41 @@ function styleCalcSettingsSheet_(sh) {
   if (typeof hdrRange.setBackground === 'function') hdrRange.setBackground('#1a73e8');
   if (typeof hdrRange.setFontColor === 'function') hdrRange.setFontColor('#ffffff');
 
-  // Памятка справа в колонках G:H (не мешает чтению A:E)
+  // Памятка справа в колонках G:H (не мешает чтению A:E) + живой справочник товарных групп
   try {
     const guide = [
       ['📌 КАК РАБОТАЕТ КАСКАД НАЦЕНОК (Э3)', 'Приоритет сверху вниз:'],
       ['1. Уровень SKU (высший приоритет)', 'Укажите в кол. A «SKU», а в кол. B — Offer id (напр. Кромка-Дуб-44мм-5м.п.) или числовой SKU Ozon.'],
-      ['2. Уровень Категория', 'Укажите в кол. A «Категория», а в кол. B — значение из колонки P листа «Номенклатура».'],
+      ['2. Уровень Категория (товарная группа)', 'Укажите в кол. A «Категория», а в кол. B — название товарной группы из «Номенклатура!P» (см. список ниже).'],
       ['3. По умолчанию (общая)', 'Если ни SKU, ни категория здесь не заданы — берутся Параметры!B10 (целевая) и Параметры!B9 (мин.).'],
       ['Формат наценок (колонки C и D)', 'Можно вводить числом в процентах (например 35 или 20) либо долей (0,35 или 0,20).'],
       ['Пример строки 1 (для артикула):', 'SKU  |  Кромка-Дуб-44мм-5м.п.  |  35  |  22  |  Индивидуальная цель по хиту'],
-      ['Пример строки 2 (для категории):', 'Категория  |  17028922  |  28  |  18  |  Базовая наценка для категории']
+      ['Пример строки 2 (для товарной группы):', 'Категория  |  Mirka  |  28  |  18  |  Базовая наценка для бренда Mirka']
     ];
+    if (groupCounts && typeof groupCounts === 'object') {
+      const sortedGroups = Object.keys(groupCounts).sort(function (a, b) {
+        return (groupCounts[b] || 0) - (groupCounts[a] || 0);
+      });
+      if (sortedGroups.length) {
+        guide.push(['📂 ТОВАРНЫЕ ГРУППЫ В «НОМЕНКЛАТУРЕ!P»', 'Скопируйте название группы в колонку B при уровне «Категория»:']);
+        sortedGroups.slice(0, 15).forEach(function (g) {
+          guide.push([g, 'Товаров в группе: ' + groupCounts[g] + ' шт.']);
+        });
+      }
+    }
     if (sh.getMaxColumns() < 8 && typeof sh.insertColumnsAfter === 'function') {
       sh.insertColumnsAfter(sh.getMaxColumns(), 8 - sh.getMaxColumns());
+    }
+    if (sh.getMaxRows() < guide.length && typeof sh.insertRowsAfter === 'function') {
+      sh.insertRowsAfter(sh.getMaxRows(), guide.length - sh.getMaxRows());
     }
     const gRange = sh.getRange(1, 7, guide.length, 2);
     gRange.setValues(guide).setWrap(true);
     sh.getRange(1, 7, 1, 2).setBackground('#e8f0fe').setFontColor('#1967d2').setFontWeight('bold');
     sh.getRange(2, 7, guide.length - 1, 2).setBackground('#f8f9fa').setFontColor('#3c4043');
+    if (guide.length > 7) {
+      sh.getRange(8, 7, 1, 2).setBackground('#e8f0fe').setFontColor('#1967d2').setFontWeight('bold');
+    }
   } catch (e) {}
 
   const widths = { 1: 190, 2: 230, 3: 150, 4: 150, 5: 260, 6: 30, 7: 250, 8: 420 };
@@ -1483,7 +1729,7 @@ function styleParamsSheet_(sh) {
     sh.setFrozenRows(3);
     sh.getRange(1, 1, 1, 3).setBackground('#1a73e8').setFontColor('#ffffff').setFontWeight('bold');
     sh.getRange(3, 1, 1, 3).setBackground('#202124').setFontColor('#ffffff').setFontWeight('bold');
-    const lastR = Math.min(sh.getLastRow(), 14);
+    const lastR = Math.min(sh.getLastRow(), 15);
     if (lastR >= 4) {
       sh.getRange(4, 1, lastR - 3, 1).setFontWeight('bold').setBackground('#f8f9fa');
       sh.getRange(4, 2, Math.min(10, lastR - 3), 1).setBackground('#e8f0fe').setFontColor('#1967d2').setFontWeight('bold');
@@ -1491,10 +1737,64 @@ function styleParamsSheet_(sh) {
       if (lastR >= 14) {
         sh.getRange(14, 2, 1, 1).setBackground('#f1f3f4').setFontColor('#3c4043').setFontWeight('bold');
       }
+      if (lastR >= 15) {
+        sh.getRange(15, 2, 1, 1).setBackground('#e8f0fe').setFontColor('#1967d2').setFontWeight('bold');
+      }
     }
     sh.setColumnWidth(1, 330);
     sh.setColumnWidth(2, 120);
     sh.setColumnWidth(3, 560);
+  } catch (e) {}
+}
+
+/**
+ * Автоматически актуализирует лист «Проект» (паспорт модели, статус этапов Э0–Э6
+ * и живая сводка последнего расчёта).
+ */
+function refreshProjectSheet_(ss, summary, params) {
+  if (!ss) return;
+  const sh = ss.getSheetByName('Проект');
+  if (!sh) return;
+  try {
+    const s = summary || {};
+    const p = params || readCalcParams_();
+    const minMpPct = Math.round((p.minMarkup || 0) * 10000) / 100;
+    const tgtMpPct = Math.round((p.targetMarkup || 0) * 10000) / 100;
+    const oldMpPct = Math.round(((p.oldPriceMarkup !== undefined ? p.oldPriceMarkup : 0.40) || 0) * 10000) / 100;
+    const drrPct = Math.round((p.drr || 0) * 10000) / 100;
+
+    const rows = [
+      ['ПАСПОРТ ПРОЕКТА «OZON UNIT — РАБОЧАЯ МОДЕЛЬ»', 'Актуализировано автоматически: ' + (s.updatedAt || '')],
+      ['Раздел / Показатель', 'Текущий статус и живые метрики книги'],
+      ['Статус этапов проекта', 'Э0 (Каркас) ✅ | Э1 (Синхронизация Ozon) ✅ | Э2 (Факт наценки) ✅ | Э3 (Целевая цена и пол акций) ✅ | Э6 (UX и валидация) ✅ | Э5 (Экспорт цен в Ozon) ⏸ вне скоупа'],
+      ['Главные рабочие листы', '1. «Расчёт» (46 кол., KPI-шапка + группы [+/-])  |  2. «Акции» (15 кол., контроль пола L:O)  |  3. «Проблемы данных»'],
+      ['Листы настроек и базы 1С', '4. «Параметры» (B4:B15)  |  5. «Настройки расчёта» (каскад SKU → группа → общая)  |  6. «Номенклатура» (база SKU и СС 1С)'],
+      ['Авто-листы Ozon API', '7. «Факт Ozon»  |  8. «Комиссия факт»  |  9. «Продажи»  |  10. «Реклама ДРР»  |  11. «Лог»'],
+      ['Всего артикулов в «Номенклатуре»', (s.total || 0) + ' SKU (товарных групп в «Номенклатура!P»: ' + (s.productGroupsCount || 0) + ')'],
+      ['Покрытие расчёта Э2/Э3', 'Рассчитано: ' + (s.calculated || 0) + ' SKU  |  Пропущено без СС/кратности 1С: ' + (s.skippedNoCost || 0) + ' SKU  |  Блок (выкуп 0%): ' + (s.blockedZeroBuyout || 0) + ' SKU'],
+      ['Источники комиссии и выкупа', 'Комиссия: из «Комиссия факт!J» — ' + (s.commFromFact || 0) + ' SKU, из «Факт Ozon!W/X» — ' + (s.commFromFallback || 0) + ' SKU  |  Выкуп: из «Продажи!M» — ' + (s.buyoutFromSales || 0) + ' SKU, из B8 — ' + (s.buyoutFallback || 0) + ' SKU'],
+      ['Параметры расчёта (Параметры!B4:B15)', 'ДРР: ' + drrPct + '%  |  Целевая наценка: ' + tgtMpPct + '%  |  Мин. наценка (пол): ' + minMpPct + '%  |  Шаг округления: ' + (p.roundStep || 1) + ' ₽  |  Зачёркнутая цена: +' + oldMpPct + '% к целевой'],
+      ['Контроль рентабельности текущих цен', 'В норме (≥ целевой цены): ' + Math.max(0, (s.calculated || 0) - (s.belowTargetPrice || 0)) + ' SKU  |  Ниже целевой цены: ' + (s.belowTargetPrice || 0) + ' SKU  |  Ниже мин. наценки: ' + (s.belowMinMarkup || 0) + ' SKU'],
+      ['Контроль акций Ozon (лист «Акции»)', 'Проверено строк: ' + (s.actionsChecked || 0) + '  |  Проходят лимит (пол ≤ макс. цены Ozon): ' + (s.actionsAllowed || 0) + '  |  Конфликт / блок: ' + (s.actionsBlocked || 0)],
+      ['Объём продаж и прибыль за период («Продажи»)', 'Выкуплено: ' + (s.totalDeliveredUnits || 0) + ' шт (' + (s.skusWithSales || 0) + ' SKU с продажами)  |  Выручка: ' + (s.totalSalesRevenue || 0) + ' ₽  |  Расчётная прибыль до налогов на объём: ' + (s.totalVolumeProfit || 0) + ' ₽'],
+      ['Правило безопасности Э5', 'Калькулятор работает строго внутри Google Таблицы и НЕ отправляет цены в Ozon API (/v1/product/import/prices не вызывается).']
+    ];
+
+    if (sh.getMaxRows() < rows.length && typeof sh.insertRowsAfter === 'function') {
+      sh.insertRowsAfter(sh.getMaxRows(), rows.length - sh.getMaxRows());
+    }
+    if (sh.getMaxColumns() < 2 && typeof sh.insertColumnsAfter === 'function') {
+      sh.insertColumnsAfter(sh.getMaxColumns(), 2 - sh.getMaxColumns());
+    }
+    sh.getRange(1, 1, Math.max(sh.getMaxRows(), rows.length), 2).clearContent();
+    sh.getRange(1, 1, rows.length, 2).setValues(rows).setWrap(true);
+    sh.setFrozenRows(2);
+    sh.getRange(1, 1, 1, 2).setBackground('#1e8e3e').setFontColor('#ffffff').setFontWeight('bold');
+    sh.getRange(2, 1, 1, 2).setBackground('#202124').setFontColor('#ffffff').setFontWeight('bold');
+    sh.getRange(3, 1, rows.length - 2, 1).setBackground('#f8f9fa').setFontWeight('bold');
+    sh.getRange(3, 2, rows.length - 2, 1).setBackground('#ffffff').setFontColor('#202124');
+    sh.setColumnWidth(1, 310);
+    sh.setColumnWidth(2, 680);
   } catch (e) {}
 }
 
