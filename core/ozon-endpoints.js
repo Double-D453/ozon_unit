@@ -186,11 +186,14 @@ function toIso(v) {
 
 /**
  * Отчёт о реализации ЗА ДЕНЬ. Только Premium Plus / Premium Pro, глубина ≤ 32 дней.
- * Единственный доступный по API источник ФАКТИЧЕСКОЙ комиссии:
- *   commission_ratio          — ставка по категории (списочная)
- *   delivery_commission.standard_fee — что реально удержали («Базовое вознаграждение Ozon»)
- *   delivery_commission.amount       — «Реализовано на сумму»
- * Разница и есть скидка за отсрочку выплаты, которую Ozon нигде больше не показывает.
+ * Поля расчёта фактической комиссии:
+ *   commission_ratio                    — ставка по категории
+ *   seller_price_per_instance           — цена продавца за единицу
+ *   delivery_commission.standard_fee    — денежная комиссия («Базовое вознаграждение Ozon»)
+ *   delivery_commission.quantity        — количество единиц
+ *   delivery_commission.amount          — отдельная сумма реализации; не знаменатель комиссии
+ * Сырой аудит 18 строк подтвердил, что standard_fee / (цена продавца × quantity)
+ * совпадает с commission_ratio; это не доказывает отдельную скидку к комиссии.
  */
 function realizationByDay(date) {
   const d = date instanceof Date ? date : new Date(date);

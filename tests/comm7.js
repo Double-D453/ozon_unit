@@ -44,36 +44,64 @@ const pr = SpreadsheetApp._get('Проблемы данных');
 for (let i=2;i<=pr.getLastRow();i++) console.log('  проблема:', JSON.stringify(pr.getRange(i,1,1,4).getValues()[0]).slice(0,120));
 
 console.log('\n========== 2. КОМИССИЯ: отчёт о реализации по дням (Premium Plus) ==========');
-function realRow(oid, sku, amount, fee, qty, ratio, total) {
+function realRow(oid, sku, amount, fee, qty, ratio, total, sellerPrice, adjustments) {
+  const price = sellerPrice === undefined ? amount/qty : sellerPrice;
+  const adj = adjustments || {};
   return { item:{offer_id:oid, sku:sku, name:'Товар '+oid, barcode:'x'},
-           commission_ratio: ratio, seller_price_per_instance: amount/qty,
+           commission_ratio: ratio, seller_price_per_instance: price,
            delivery_commission:{ amount:amount, standard_fee:fee, commission:0, total:total,
-             quantity:qty, price_per_instance:amount/qty, bonus:0, bank_coinvestment:0, stars:0,
-             pick_up_point_coinvestment:0, compensation:0 },
+             quantity:qty, price_per_instance:amount/qty, bonus:adj.bonus||0,
+             bank_coinvestment:adj.bank_coinvestment||0, stars:adj.stars||0,
+             pick_up_point_coinvestment:adj.pick_up_point_coinvestment||0,
+             compensation:adj.compensation||0 },
            return_commission:{ amount:0, standard_fee:0, total:0, quantity:0 } };
 }
 const DAYS = [];
 for (let i=0;i<12;i++) {
   const oid = 'SKU-' + (i+1);
-  // ставка категории 49,5%, удержано 48,0% → скидка 1,5 п.п.
-  DAYS.push(realRow(oid, 910000+i, 10000, 4800, 10, 0.495, 5200));
+  // Синтетический регрессионный случай: комиссия от seller-base 10 000 ₽,
+  // amount 9 000 ₽; бонус 1 000 ₽. Категория 49,5%, фактический fee 48%.
+  DAYS.push(realRow(oid, 910000+i, 9000, 4800, 10, 0.495, 5200, 1000, { bonus:1000 }));
 }
-DAYS.push(realRow('ОСОБЫЙ', 910099, 4000, 1400, 4, 0.35, 2600));   // 35% категория, факт 35% → скидка 0
+// Категория и факт 35%; base 4 000 ₽, amount 3 000 ₽ + bonus 1 000 ₽.
+DAYS.push(realRow('ОСОБЫЙ', 910099, 3000, 1400, 4, 0.35, 2600, 1000, { bonus:1000 }));
 let byDayCalls = 0;
 realizationByDay_ = function(y,m,d){ byDayCalls++; return DAYS.slice(); };
 realizationMonth_ = function(){ throw new Error('не должен вызываться, когда by-day сработал'); };
+
+// Регрессия: совпадение ставки с audit-like строками не должно перезаписывать B14.
+const savedDays = DAYS.slice();
+DAYS.length = 0;
+for (let i=0;i<12;i++) {
+  DAYS.push(realRow('AUDIT-' + i, 920000+i, 600, 495, 1, 0.495, 505, 1000, { bonus:400 }));
+}
+const b14BeforeAudit = Number(par.getRange(14,2).getValue());
+const auditLike = diagCommission(14);
+const b14AfterAudit = Number(par.getRange(14,2).getValue());
+const auditLikePassed = !auditLike.applied && b14AfterAudit===b14BeforeAudit &&
+  auditLike.factPercent===49.5 && auditLike.controlPassed===true;
+console.log('audit-like: fact', auditLike.factPercent, 'B14 до/после', b14BeforeAudit, b14AfterAudit,
+  auditLikePassed ? 'OK' : 'ПРОВАЛ');
+if (!auditLikePassed) throw new Error('audit-like: ставка должна быть 49,5%, B14 не должен измениться');
+DAYS.length = 0;
+Array.prototype.push.apply(DAYS, savedDays);
+byDayCalls = 0;
 
 const rc = diagCommission(14);
 console.log('результат:', JSON.stringify(rc));
 console.log('дней запрошено:', byDayCalls);
 console.log('ОЖИДАЕМ: listPercent 49.03 (взвешенно, с артикулом 35%), factPercent 47.58, скидка 1.45, артикулов 13');
-console.log('период должен идти от старого к новому:', /25\.09\.2026 — 08\.10\.2026/.test(rc.period) ? 'OK' : 'ПРОВАЛ → ' + rc.period);
+const periodDates = String(rc.period || '').match(/^(\d{2}\.\d{2}\.\d{4}) — (\d{2}\.\d{2}\.\d{4})/);
+function periodStamp(s) { const p=s.split('.').map(Number); return Date.UTC(p[2],p[1]-1,p[0]); }
+const orderedPeriod = !!periodDates && periodStamp(periodDates[1]) <= periodStamp(periodDates[2]);
+console.log('период должен идти от старого к новому:', orderedPeriod ? 'OK' : 'ПРОВАЛ → ' + rc.period);
+if (!orderedPeriod) throw new Error('period должен быть упорядочен от старого к новому');
 const cf = SpreadsheetApp._get('Комиссия факт');
 console.log('лист «Комиссия факт»: строк', cf.getLastRow()-1, 'колонок', commHeaders_().length);
-console.log('  шапка:', JSON.stringify(cf.getRange(1,1,1,12).getValues()[0]));
-console.log('  строка 2:', JSON.stringify(cf.getRange(2,1,1,12).getValues()[0]));
+console.log('  шапка:', JSON.stringify(cf.getRange(1,1,1,13).getValues()[0]));
+console.log('  строка 2:', JSON.stringify(cf.getRange(2,1,1,13).getValues()[0]));
 console.log('  итоги N:O');
-for (let i=1;i<=9;i++) console.log('   ', JSON.stringify(cf.getRange(i,14,1,2).getValues()[0]));
+for (let i=1;i<=12;i++) console.log('   ', JSON.stringify(cf.getRange(i,14,1,2).getValues()[0]));
 console.log('«Параметры» строка 14:', JSON.stringify(par.getRange(14,1,1,3).getValues()[0]).slice(0,220));
 
 console.log('\n========== 3. КОМИССИЯ: откат на месячный отчёт ==========');

@@ -93,6 +93,8 @@ function makeEnv() {
   Sheet.prototype.getMaxRows = function () { return Math.max(this.rows.length, 1); };
   Sheet.prototype.getMaxColumns = function () { return 26; };
   Sheet.prototype.insertRowsAfter = function (after, n) { for (let i = 0; i < n; i++) this.rows.push([]); };
+  Sheet.prototype.appendRow = function (values) { this.rows.push(values.slice()); return this; };
+  Sheet.prototype.deleteRows = function (start, count) { this.rows.splice(start - 1, count); return this; };
   Sheet.prototype.setFrozenRows = function () { return this; };
   Sheet.prototype.clear = function () { this.rows.length = 0; return this; };
   Sheet.prototype.setColumnWidth = function () { return this; };

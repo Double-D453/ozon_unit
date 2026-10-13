@@ -371,8 +371,10 @@ function fbsPostingsWithFinance_(sinceIso, toIso) {
  *                       price_per_instance, bonus, bank_coinvestment, stars,
  *                       pick_up_point_coinvestment, compensation}
  *   return_commission{...то же...}
- * где amount = «Реализовано на сумму», standard_fee = «Базовое вознаграждение Ozon»
- (фактически удержанная комиссия, ₽), total = «Итого к начислению».
+ * Где: amount = «Реализовано на сумму»; standard_fee = «Базовое вознаграждение Ozon»
+ * (денежная комиссия, ₽); total = «Итого к начислению». На проверенных строках
+ * база комиссии = seller_price_per_instance × quantity, а не amount. total сверяется
+ * как amount − standard_fee + bonus и остальные корректировки.
  */
 function realizationByDay_(year, month, day) {
   const data = sellerFetch_('/v1/finance/realization/by-day',
