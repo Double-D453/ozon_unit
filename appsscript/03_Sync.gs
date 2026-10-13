@@ -308,8 +308,9 @@ function syncFact() {
     const commDisc = ensureParams_();
 
     fillNomSku_(nom, info);
+    fillNomCategory_(nom, info);
 
-    // ---- дозаполняем новые строки: SKU, название, остаток, схема ----
+    // ---- дозаполняем новые строки: SKU, название, остаток, схема, категория ----
     if (newRowStart) {
       const filledRows = missingInBase.map(function (oid) {
         const it = info[oid] || {};
@@ -322,6 +323,7 @@ function syncFact() {
         r[11] = st.fbo;
         r[13] = st.fbo > 0 ? 'FBO' : (st.fbs > 0 ? 'FBS' : '');
         r[14] = 'Новый из API';
+        r[CFG.NOM_COL_CAT - 1] = it.category_id ? (isNaN(Number(it.category_id)) ? it.category_id : Number(it.category_id)) : '';
         r[CFG.NOM_COL_SYNC - 1] = 'новый из Ozon — нет данных 1С';
         return r;
       });
@@ -511,9 +513,7 @@ function syncActions() {
       logMsg_('WARN', 'Акции: не удалось построить карту товаров: ' + e.message);
     }
 
-    const headers = ['Акция (ID)', 'Название акции', 'Offer id', 'Product id', 'Цена до акции, ₽',
-                     'Цена акции, ₽', 'Макс. допустимая цена, ₽', 'Мин. кол-во', 'В акции, шт',
-                     'Способ', 'Дата среза'];
+    const headers = actHeaders_();
     const sh = sheet_(CFG.SHEETS.ACT, headers);
     const today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'dd.MM.yyyy HH:mm');
 
@@ -533,7 +533,7 @@ function syncActions() {
           const pid = String(p.id || p.product_id || '');
           const offer = p.offer_id || idMap[pid] || '';
           if (offer) mapped++;
-          out.push([
+          const row = [
             id, title, offer, pid,
             Number(p.price || 0),
             Number(p.action_price || 0),
@@ -542,7 +542,9 @@ function syncActions() {
             Number(p.stock || 0),
             p.add_mode || '',
             today
-          ]);
+          ];
+          while (row.length < headers.length) row.push('');
+          out.push(row);
         });
         logMsg_('INFO', 'Акция ' + id + ' («' + title + '»' + (dateEnd ? ', до ' + dateEnd : '') + '): товаров ' +
           products.length + ', сопоставлено с нашим артикулом — ' + mapped);
@@ -605,6 +607,58 @@ function fillNomSku_(nom, info) {
 }
 
 /**
+ * Дозаполняет пустую колонку P «Номенклатуры» (Категория, CFG.NOM_COL_CAT) значением
+ * category_id / description_category_id из Ozon без перезаписи существующих значений.
+ */
+function fillNomCategory_(nom, info) {
+  try {
+    const colIdx = CFG.NOM_COL_CAT || 16;
+    if (nom.getMaxColumns() < colIdx) return;
+    const n = nom.getLastRow() - 1;
+    if (n < 1) return;
+    const offers = nom.getRange(2, 1, n, 1).getValues();
+    const curCats = nom.getRange(2, colIdx, n, 1).getValues();
+
+    let filled = 0, haveCat = 0;
+    const col = offers.map(function (r, idx) {
+      const oid = String(r[0] === undefined || r[0] === null ? '' : r[0]).trim();
+      const cur = (curCats[idx] && curCats[idx][0] !== undefined && curCats[idx][0] !== null)
+        ? curCats[idx][0]
+        : '';
+      if (String(cur).trim() !== '') { haveCat++; return [cur]; }
+      const cat = (info[oid] || {}).category_id;
+      if (cat === undefined || cat === null || String(cat).trim() === '') return [cur];
+      filled++; haveCat++;
+      return [isNaN(Number(cat)) ? String(cat).trim() : Number(cat)];
+    });
+
+    if (!filled) return;
+
+    const formulas = nom.getRange(2, colIdx, n, 1).getFormulas();
+    const hasFormula = formulas.some(function (r) { return String(r[0] || '') !== ''; });
+    if (hasFormula) {
+      logMsg_('WARN', 'Номенклатура: в колонке P (Категория) есть формулы — перезапись пропущена (' +
+        filled + ' пустых ячеек)');
+      return;
+    }
+    nom.getRange(2, colIdx, n, 1).setValues(col);
+    logMsg_('INFO', 'Номенклатура: дозаполнено категорий (P) из API — ' + filled +
+      ' (всего с категорией: ' + haveCat + ' из ' + n + ')');
+  } catch (e) {
+    logMsg_('WARN', 'Номенклатура: не удалось дозаполнить категорию (P) — ' + e.message);
+  }
+}
+
+function actHeaders_() {
+  return CFG.ACT_HEADERS || [
+    'Акция (ID)', 'Название акции', 'Offer id', 'Product id', 'Цена до акции, ₽',
+    'Цена акции, ₽', 'Макс. допустимая цена, ₽', 'Мин. кол-во', 'В акции, шт',
+    'Способ', 'Дата среза',
+    'Наш мин. пол, ₽', 'Запас к лимиту Ozon, ₽', 'Наценка по цене акции, %', 'Статус ограничения'
+  ];
+}
+
+/**
  * Добавляет в «Номенклатуру» товары, которые есть в магазине Ozon,
  * но которых нет в нашей базе (по итогам прогона №3 — 202 штуки).
  * Существующие строки НЕ меняются, только дописываются в конец:
@@ -651,6 +705,7 @@ function addMissingSkus() {
       row[11] = st.fbo;                                     // L Остаток Ozon (FBO)
       row[13] = st.fbo > 0 ? 'FBO' : (st.fbs > 0 ? 'FBS' : '');  // N Схема
       row[14] = 'Новый из API — нет в 1С';                  // O Статус
+      row[CFG.NOM_COL_CAT - 1] = it.category_id ? (isNaN(Number(it.category_id)) ? it.category_id : Number(it.category_id)) : ''; // P Категория
       row[CFG.NOM_COL_SYNC - 1] = 'новый из Ozon — нет данных 1С'; // Q Синк с Ozon
       return row;
     });
@@ -1610,6 +1665,7 @@ function onOpen() {
     .addItem('Синхронизировать продажи (аналитика)', 'menuSyncSales')
     .addItem('Синхронизировать рекламу (ДРР)', 'menuSyncDrr')
     .addItem('Синхронизировать акции', 'menuSyncActions')
+    .addItem('Рассчитать юнит-экономику (Э2/Э3)', 'menuCalculate')
     .addSeparator()
     .addItem('Добавить недостающие SKU в базу', 'menuAddMissing')
     .addItem('Обновить инструкцию в таблице', 'menuRefreshInstruction')
@@ -1629,6 +1685,7 @@ function menuSyncFact()    { ui_('Синхронизация данных', sync
 function menuSyncSales()   { ui_('Продажи по SKU', syncSales14); }
 function menuSyncActions() { ui_('Синхронизация акций', syncActions); }
 function menuSyncDrr()     { ui_('Синхронизация рекламы', syncDrr14); }
+function menuCalculate()   { ui_('Расчёт юнит-экономики (Э2/Э3)', calculateUnitEconomics); }
 function menuAddMissing()  {
   const ui = SpreadsheetApp.getUi();
   const r = ui.alert('Добавить недостающие SKU',
