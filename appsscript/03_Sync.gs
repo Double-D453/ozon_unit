@@ -82,13 +82,26 @@ function sheet_(name, headers) {
   return sh;
 }
 
-/** Журнал: пишем в лист «Лог» (создаём при необходимости). */
+/** Sink по умолчанию: лист «Лог»; формат строки и ротация сохранены. */
+function sheetLogSink_(record) {
+  const sh = sheet_(CFG.SHEETS.LOG, ['Время', 'Уровень', 'Сообщение']);
+  sh.appendRow([record.time, record.level, record.message]);
+  const last = sh.getLastRow();
+  if (last > CFG.LOG_KEEP + 1) sh.deleteRows(2, last - CFG.LOG_KEEP - 1);
+}
+
+/**
+ * Подключаемый приёмник журнала. По умолчанию пишет в Google Sheets;
+ * в другом окружении его можно заменить консолью, Pino или хранилищем.
+ * Запись sink получает как {time: Date, level, message}.
+ */
+var LOG_SINK_ = sheetLogSink_;
+
+/** Пишет в sink, не позволяя ошибке логирования прервать основной процесс. */
 function logMsg_(level, text) {
+  const record = { time: new Date(), level: level, message: String(text).slice(0, 5000) };
   try {
-    const sh = sheet_(CFG.SHEETS.LOG, ['Время', 'Уровень', 'Сообщение']);
-    sh.appendRow([new Date(), level, String(text).slice(0, 5000)]);
-    const last = sh.getLastRow();
-    if (last > CFG.LOG_KEEP + 1) sh.deleteRows(2, last - CFG.LOG_KEEP - 1);
+    if (typeof LOG_SINK_ === 'function') LOG_SINK_(record);
   } catch (e) { /* лог не должен ломать основной процесс */ }
   if (level === 'ERROR') console.error(text); else console.log(text);
 }
