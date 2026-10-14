@@ -76,22 +76,22 @@ const be = ue.breakEvenPrice(base.c, base.d, base.land, base.log, base.acq);
 ok(be < pLow, 'цена безубыточности ниже цены с наценкой 20%', 'be=' + be + ' pLow=' + pLow);
 ok(ue.markupFromPrice(be, base.c, base.d, base.land, base.log, base.acq) < 1e-9,
    'наценка по цене безубыточности = 0');
-// (1−c)(1−d) ≤ 0 только при c ≥ 1 или d ≥ 1 — такие доли отсекаем явно
+// (1−c−d) ≤ 0 при c ≥ 1, d ≥ 1 или c + d ≥ 1 — такие доли отсекаем явно
 ok(ue.priceFromMarkup(0.3, 1, base.d, base.land, base.log, base.acq) === null, 'комиссия 100% → null');
 ok(ue.priceFromMarkup(0.3, base.c, 1, base.land, base.log, base.acq) === null, 'ДРР 100% → null');
-// комиссия 90% формально разрешена, но запас цены мизерный — это отдельный флаг
-near(ue.headroom(0.9, 0.15), 0.085, 0.0001, 'запас цены при комиссии 90% и ДРР 15%');
-ok(!ue.isFeasible(0.9, 0.15), 'комиссия 90% + ДРР 15% — экономика нежизнеспособна');
-ok(ue.isFeasible(base.c, base.d), 'комиссия 48,3% + ДРР 15% — жизнеспособна');
+// комиссия 75% + ДРР 15% = 90% удержаний: запас цены 10% (< 20%) — отдельный флаг нежизнеспособности
+near(ue.headroom(0.75, 0.15), 0.10, 0.0001, 'запас цены при комиссии 75% и ДРР 15% (1 - 0.75 - 0.15 = 0.10)');
+ok(!ue.isFeasible(0.75, 0.15), 'комиссия 75% + ДРР 15% — экономика нежизнеспособна');
+ok(ue.isFeasible(base.c, base.d), 'комиссия 48,3% + ДРР 15% — жизнеспособна (headroom 36,7%)');
 const infeasible = ue.unitEconomics(Object.assign({}, {
   costPerUnit: 1343.66, multiplicity: 0.2, packaging: 42.89, transport: 0,
-  commissionRate: 0.9, drrRate: 0.15, logistics: 189.5, acquiring: 10.73,
+  commissionRate: 0.75, drrRate: 0.15, logistics: 189.5, acquiring: 10.73,
   price: 1757, oldPrice: 2355, minPrice: 1615, minMarkup: 0.2, targetMarkup: 0.3
 }));
 ok(infeasible.ok === true, 'нездравая экономика считается, а не падает');
 ok(infeasible.warnings.some(function (w) { return /нерыночной/.test(w); }),
    'и сопровождается понятным предупреждением', JSON.stringify(infeasible.warnings));
-near(ue.headroom(base.c, base.d), 0.43945, 0.0001, 'запас цены на проверенном образце');
+near(ue.headroom(base.c, base.d), 0.367, 0.0001, 'запас цены по честной формуле 1 - c - d (1 - 0.483 - 0.15 = 0.367)');
 ok(ue.markupFromPrice(1757, 1, 0, base.land, base.log, base.acq) === null, 'комиссия 100% → null');
 ok(ue.markupFromPrice(1757, base.c, base.d, 0, base.log, base.acq) === null, 'нулевой ленд-кост → null, а не Infinity');
 
@@ -305,23 +305,23 @@ ok(ue.roundPriceUp(1377.42, 1) === 1378 && ue.roundPriceUp(1377.42, 10) === 1380
 
 const taxSku = Object.assign({}, oakSku, { vatRate: 0.22, profitTaxRate: 0.25, roundStep: 1 });
 const taxRes = ue.unitEconomics(taxSku);
-ok(Math.abs(taxRes.price.target - 1377.49) < 0.05 && taxRes.price.targetRounded === 1378 &&
+ok(Math.abs(taxRes.price.target - 1649.42) < 0.05 && taxRes.price.targetRounded === 1650 &&
    Math.abs(taxRes.taxes.vatAmount - 1757 * 0.22 / 1.22) < 0.01 &&
    Math.abs(taxRes.taxes.profitTax - Math.max(0, taxRes.taxes.profitBeforeTax) * 0.25) < 0.01,
-   'Налоги: целевая цена по формуле до налогов (1377,49 → 1378 ₽), НДС и налог на прибыль показаны отдельно');
+   'Налоги и честная формула (1 - c - d): целевая цена до налогов (1649,42 → 1650 ₽), НДС и налог на прибыль показаны отдельно');
 
 const actSku = Object.assign({}, oakSku, {
   roundStep: 1,
   actions: [
     { actionId: 1977747, maxActionPrice: 1060, actionPrice: 1073 },
-    { actionId: 2000001, maxActionPrice: 1350, actionPrice: 1320 }
+    { actionId: 2000001, maxActionPrice: 1600, actionPrice: 1580 }
   ]
 });
 const actRes = ue.unitEconomics(actSku);
 ok(actRes.actionChecks.length === 2 &&
    actRes.actionChecks[0].allowed === false &&
    actRes.actionChecks[1].allowed === true,
-   'Ограничения акций: наш пол (1307 ₽) выше лимита 1060 ₽ блокируется, а при лимите 1350 ₽ проходит');
+   'Ограничения акций: наш пол (1565 ₽) выше лимита 1060 ₽ блокируется, а при лимите 1600 ₽ проходит');
 
 ok(ue.recommendedOldPrice(1195, 0.40, 1) === 1673 &&
    ue.recommendedOldPrice(1370, 40, 10) === 1920,
@@ -342,11 +342,40 @@ const volSku = Object.assign({}, oakSku, {
 });
 const volRes = ue.unitEconomics(volSku);
 ok(volRes.category === 'Кромка' &&
-   volRes.price.recommendedOldPrice === ue.roundPriceUp(1378 * 1.40, 1) &&
-   volRes.price.deltaRub === 1757 - 1378 &&
+   volRes.price.recommendedOldPrice === ue.roundPriceUp(1650 * 1.40, 1) &&
+   volRes.price.deltaRub === 1757 - 1650 &&
    volRes.salesVolume.deliveredUnits === 10 &&
    Math.abs(volRes.salesVolume.totalProfitBeforeTax - volRes.taxes.profitBeforeTax * 10) < 0.05,
    'Объём продаж и комплект цен Э3: дельта цены, зачёркнутая цена и суммарная прибыль на объём продаж');
+
+// --- Проверка новых рыночных улучшений (Идеи 2..9) ---
+near(ue.logisticsFbo(75, 254, 25, 0.70), 75 * 0.70 + 254 * 0.30 + 25, 0.001,
+     'География логистики (Идея 2): при 70% продаж в МСК тариф ближе к min (153,70 ₽ вместо 189,50 ₽)');
+ok(ue.isHomeCluster('Москва, МО и Дальние регионы', '', 'МСК') === true &&
+   ue.isHomeCluster('Урал', 'Москва-Запад', 'МСК') === false,
+   'География кластеров: распознавание домашнего кластера МСК vs нелокального кластера');
+
+const drrSkuInfo = ue.resolveItemDrr({ salesDrrPct: 8.5 }, 0.15, 0.50);
+const drrCappedInfo = ue.resolveItemDrr({ salesDrrPct: 85 }, 0.15, 0.50);
+const drrFallbackInfo = ue.resolveItemDrr({}, 0.15, 0.50);
+ok(Math.abs(drrSkuInfo.rate - 0.085) < 1e-6 && drrSkuInfo.source === 'Продажи!G (SKU)' &&
+   Math.abs(drrCappedInfo.rate - 0.50) < 1e-6 && Boolean(drrCappedInfo.warning) &&
+   Math.abs(drrFallbackInfo.rate - 0.15) < 1e-6 && drrFallbackInfo.source === 'Параметры!B4',
+   'Индивидуальный ДРР по SKU (Идея 7): приоритет фактического ДРР SKU с потолком 50% и откатом на B4');
+
+const mpRisk = ue.checkMinPriceProtection(0, 1500);
+const mpLow = ue.checkMinPriceProtection(1400, 1500);
+const mpOk = ue.checkMinPriceProtection(1600, 1500);
+ok(!mpRisk.ok && !mpLow.ok && mpOk.ok,
+   'Защита min_price в Ozon (Идея 5): обнаружение пустого или заниженного min_price');
+
+const abcClasses = ue.classifyAbcByProfit([8000, 1500, 500, -300, 0], [10, 5, 2, 3, 0]);
+ok(abcClasses[0].indexOf('A') === 0 && abcClasses[1].indexOf('B') === 0 &&
+   abcClasses[2].indexOf('C') === 0 && abcClasses[3] === 'УБЫТОК' && abcClasses[4] === 'Нет продаж',
+   'ABC-анализ по прибыли (Идея 6): распределение A (80%) / B (15%) / C (5%) / УБЫТОК / Нет продаж');
+
+near(ue.landCost(1000, 1, 50, 0, 0.02), 1050 * 1.02, 0.001,
+     'Резерв на брак и хранение (Идея 9): корректное увеличение ленд-коста на +2%');
 
 // ============================================ ИТОГ
 console.log('\n' + '='.repeat(58));

@@ -766,6 +766,79 @@ function nomSkuMap_() {
 }
 
 /**
+ * Определяет, относится ли кластер/регион доставки к домашнему кластеру склада (по умолчанию МСК),
+ * либо совпадает с кластером отгрузки.
+ */
+function isHomeClusterSales_(clusterTo, clusterFrom, warehouse) {
+  const to = String(clusterTo || '').trim().toLowerCase();
+  if (!to) return null;
+  const from = String(clusterFrom || '').trim().toLowerCase();
+  if (from && to === from) return true;
+  const wh = String(warehouse || 'МСК').trim().toLowerCase();
+  if (wh === '' || wh.indexOf('мск') !== -1 || wh.indexOf('моск') !== -1) {
+    return /москв|мск|московск|твер|калуж|тул|рязан|владимир|смоленск|ярослав|костром|иванов|брянск|орёл|орел|тамбов|липецк|воронеж|цфо|центр/.test(to);
+  }
+  return to.indexOf(wh) !== -1;
+}
+
+/**
+ * Сбор географии продаж по отправлениям FBO/FBS за период для расчёта доли локальных продаж
+ * в домашнем кластере (например, МСК) по каждому SKU и по магазину в целом.
+ */
+function collectSalesGeoMap_(sinceIso, toIso) {
+  const out = { bySku: {}, byOffer: {}, totalLocal: 0, totalGeo: 0, storeLocalSharePct: null };
+  let postings = [];
+  try {
+    if (typeof fboPostingsWithFinance_ === 'function') {
+      postings = postings.concat(fboPostingsWithFinance_(sinceIso, toIso) || []);
+    }
+  } catch (e1) {}
+  try {
+    if (typeof fbsPostingsWithFinance_ === 'function') {
+      postings = postings.concat(fbsPostingsWithFinance_(sinceIso, toIso) || []);
+    }
+  } catch (e2) {}
+
+  if (!postings.length) return out;
+
+  postings.forEach(function (p) {
+    if (!p) return;
+    const fin = p.financial_data || {};
+    const an = p.analytics_data || {};
+    const clusterTo = String(fin.cluster_to || an.region || an.city || '').trim();
+    const clusterFrom = String(fin.cluster_from || an.warehouse_name || '').trim();
+    if (!clusterTo) return;
+    const isLocal = isHomeClusterSales_(clusterTo, clusterFrom, 'МСК');
+    if (isLocal === null) return;
+
+    (p.products || []).forEach(function (pr) {
+      if (!pr) return;
+      const qty = Math.max(1, Number(pr.quantity) || 1);
+      const sku = String(pr.sku || '').replace(/\.0+$/, '');
+      const oid = String(pr.offer_id || '').trim();
+
+      out.totalGeo += qty;
+      if (isLocal) out.totalLocal += qty;
+
+      const touch = function (map, key) {
+        if (!key) return;
+        if (!map[key]) map[key] = { local: 0, total: 0, clusters: {} };
+        map[key].total += qty;
+        if (isLocal) map[key].local += qty;
+        map[key].clusters[clusterTo] = (map[key].clusters[clusterTo] || 0) + qty;
+      };
+      touch(out.bySku, sku);
+      touch(out.byOffer, oid);
+    });
+  });
+
+  if (out.totalGeo > 0) {
+    out.storeLocalSharePct = Math.round((out.totalLocal / out.totalGeo) * 10000) / 100;
+  }
+  return out;
+}
+
+/**
  * Продажи по SKU за период: выручка и заказы (доступно всем); с подпиской
  * Premium Plus дополнительно доставлено / возвраты / отмены → реальный % выкупа
  * по каждому SKU (колонки J..M листа «Продажи»).
@@ -846,6 +919,8 @@ function syncSales(days) {
 
     rows.sort(function (a, b) { return Number(b[3]) - Number(a[3]); });
 
+    const geo = collectSalesGeoMap_(rng.from, rng.to);
+
     const sh = sheet_(CFG.SHEETS.SALES, salesHeaders_());
     const need = rows.length + 1;
     if (sh.getMaxRows() < need) sh.insertRowsAfter(sh.getMaxRows(), need - sh.getMaxRows());
@@ -866,6 +941,35 @@ function syncSales(days) {
       ['Период', label],
       ['Обновлено', today]
     ]).setFontWeight('bold');
+
+    // География продаж по кластерам (колонки R..U = 18..21 + сводная доля в O9:P9)
+    try {
+      if (sh.getMaxColumns() < 21 && typeof sh.insertColumnsAfter === 'function') {
+        sh.insertColumnsAfter(sh.getMaxColumns(), 21 - sh.getMaxColumns());
+      }
+      sh.getRange(9, 15, 1, 2).setValues([[
+        'Доля кластера МСК, %',
+        geo.storeLocalSharePct !== null ? geo.storeLocalSharePct : 'нет гео-данных'
+      ]]).setFontWeight('bold');
+      sh.getRange(1, 18, 1, 4).setValues([[
+        'Заказов в МСК, шт', 'Заказов с гео, шт', 'Доля кластера МСК, %', 'Топ кластер доставки'
+      ]]).setFontWeight('bold');
+      if (rows.length) {
+        const geoRows = rows.map(function (r) {
+          const oid = String(r[0] || '').trim();
+          const sku = String(r[1] || '').trim();
+          const g = geo.byOffer[oid] || geo.bySku[sku] || null;
+          if (!g || !g.total) return ['', '', '', ''];
+          let topCluster = '', topCnt = 0;
+          Object.keys(g.clusters || {}).forEach(function (cl) {
+            if (g.clusters[cl] > topCnt) { topCnt = g.clusters[cl]; topCluster = cl; }
+          });
+          const pct = Math.round((g.local / g.total) * 10000) / 100;
+          return [g.local, g.total, pct, topCluster];
+        });
+        sh.getRange(2, 18, geoRows.length, 4).setValues(geoRows);
+      }
+    } catch (eg) {}
 
     logMsg_('INFO', 'Продажи: SKU с данными ' + rows.length + ', выручка ' + Math.round(sumRev) +
       ' ₽, заказано ' + sumUnits + ' шт за ' + label + '. Не нашлось в «Номенклатуре»: ' + noOffer +

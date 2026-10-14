@@ -192,8 +192,187 @@ function resolveMarkupCascade(skuMarkup, categoryMarkup, defaultMarkup) {
 }
 
 /**
- * Округление цены вверх (ceil) по шагу из «Параметры!B11».
+ * Нормализация доли локальных продаж в домашнем кластере (0..1).
+ * По умолчанию 0.5 (середина вилки min/max).
+ * Чем выше доля продаж в домашнем кластере (например, 0.70 = 70% в МСК),
+ * тем ближе расчётная логистика к минимальному тарифу Ozon:
+ *   tariff = min * localShare + max * (1 - localShare)
  */
+function normalizeLocalShare(localShare) {
+  if (localShare === '' || localShare === null || localShare === undefined || typeof localShare === 'boolean') {
+    return 0.5;
+  }
+  const f = toFractionRate(localShare);
+  if (f === null || f < 0 || f > 1) return 0.5;
+  return f;
+}
+
+/**
+ * Определяет, относится ли кластер/регион доставки к домашнему кластеру склада (по умолчанию МСК),
+ * либо совпадает с кластером отгрузки.
+ */
+function isHomeCluster(clusterTo, clusterFrom, warehouse) {
+  const to = String(clusterTo || '').trim().toLowerCase();
+  if (!to) return null;
+  const from = String(clusterFrom || '').trim().toLowerCase();
+  if (from && to === from) return true;
+  const wh = String(warehouse || 'МСК').trim().toLowerCase();
+  if (wh === '' || wh.indexOf('мск') !== -1 || wh.indexOf('моск') !== -1) {
+    return /москв|мск|московск|твер|калуж|тул|рязан|владимир|смоленск|ярослав|костром|иванов|брянск|орёл|орел|тамбов|липецк|воронеж|цфо|центр/.test(to);
+  }
+  return to.indexOf(wh) !== -1;
+}
+
+/**
+ * Выбор расчётной ставки ДРР по товару (Идея 7):
+ *   1) если по SKU есть фактический ДРР на листе «Продажи» (колонка G или F/D)
+ *      или на листе «Реклама ДРР» (колонка H) — берём индивидуальный ДРР SKU
+ *      с защитным потолком maxDrrCap (по умолчанию 50%, чтобы единичный клик не уводил цену в космос);
+ *   2) иначе берём общую ставку магазина из «Параметры!B4».
+ */
+function resolveItemDrr(options, defaultDrr, maxDrrCap) {
+  const opts = options || {};
+  const def = toFractionRate(defaultDrr);
+  const fallback = (def !== null && def >= 0 && def < 1) ? def : 0.15;
+  const cap = (toFractionRate(maxDrrCap) !== null && toFractionRate(maxDrrCap) > 0)
+    ? toFractionRate(maxDrrCap)
+    : 0.50;
+
+  let rawFrac = null;
+  let source = '';
+
+  const salesPct = toFractionRate(opts.salesDrrPct);
+  const salesSpend = num(opts.salesAdSpend);
+  const salesRev = num(opts.salesRevenue);
+  const drrSheetPct = toFractionRate(opts.drrSheetPct);
+
+  if (salesPct !== null && salesPct >= 0) {
+    rawFrac = salesPct;
+    source = 'Продажи!G (SKU)';
+  } else if (salesSpend !== null && salesSpend >= 0 && salesRev !== null && salesRev > 0) {
+    rawFrac = salesSpend / salesRev;
+    source = 'Продажи!F/D (SKU)';
+  } else if (drrSheetPct !== null && drrSheetPct >= 0) {
+    rawFrac = drrSheetPct;
+    source = 'Реклама ДРР!H (SKU)';
+  }
+
+  if (rawFrac === null) {
+    return {
+      rate: fallback,
+      percent: Math.round(fallback * 10000) / 100,
+      source: 'Параметры!B4',
+      warning: null
+    };
+  }
+
+  if (rawFrac > cap) {
+    return {
+      rate: cap,
+      percent: Math.round(cap * 10000) / 100,
+      source: source + ' (огр. ' + Math.round(cap * 100) + '%)',
+      warning: 'ДРР по SKU (' + Math.round(rawFrac * 1000) / 10 + '%) ограничен потолком ' + Math.round(cap * 100) + '%'
+    };
+  }
+
+  return {
+    rate: rawFrac,
+    percent: Math.round(rawFrac * 10000) / 100,
+    source: source,
+    warning: null
+  };
+}
+
+/**
+ * Маржинальность цены (Return on Sales, ROS):
+ *   ROS = Прибыль до налогов / Цена продажи
+ * Показывает, сколько копеек прибыли лежит в каждом рубле выручки (в отличие от наценки ROI,
+ * которая делит прибыль на себестоимость).
+ */
+function marginFromPrice(profitBeforeTax, price) {
+  const pbt = num(profitBeforeTax);
+  const p = num(price);
+  if (pbt === null || p === null || p <= 0) return null;
+  return pbt / p;
+}
+
+/**
+ * Проверка защиты карточки полем min_price в Ozon относительно нашего пола (Идея 5).
+ */
+function checkMinPriceProtection(ozonMinPrice, floorPrice) {
+  const mp = num(ozonMinPrice);
+  const fl = num(floorPrice);
+  if (fl === null || fl <= 0) {
+    return { ok: false, status: '—', warning: null };
+  }
+  if (mp === null || mp <= 0) {
+    return {
+      ok: false,
+      status: 'РИСК: не задан min_price в Ozon',
+      warning: 'не задан min_price в Ozon (товар не защищён от автоакций)'
+    };
+  }
+  if (mp < fl - 1e-9) {
+    return {
+      ok: false,
+      status: 'РИСК: min_price < пола (' + Math.round(mp - fl) + ' ₽)',
+      warning: 'min_price в Ozon ниже нашего ограничения для акций'
+    };
+  }
+  return {
+    ok: true,
+    status: 'ОК: защищён (запас +' + Math.round(mp - fl) + ' ₽)',
+    warning: null
+  };
+}
+
+/**
+ * ABC-классификация ассортимента по прибыли на объём продаж (Идея 6):
+ *   • A (Лидеры — 80% прибыли)
+ *   • B (Середина — 15% прибыли)
+ *   • C (Малый вклад — 5% прибыли)
+ *   • УБЫТОК (Прибыль на объём < 0)
+ *   • Нет продаж (Выкуплено = 0 шт)
+ */
+function classifyAbcByProfit(volumeProfits, deliveredUnitsList) {
+  const n = Array.isArray(volumeProfits) ? volumeProfits.length : 0;
+  const out = new Array(n).fill('Нет продаж');
+  let totalPos = 0;
+  const posItems = [];
+
+  for (let i = 0; i < n; i++) {
+    const units = deliveredUnitsList && deliveredUnitsList[i] !== undefined ? (num(deliveredUnitsList[i]) || 0) : 0;
+    const vp = num(volumeProfits[i]);
+    if (units <= 0 || vp === null) {
+      out[i] = 'Нет продаж';
+    } else if (vp < 0) {
+      out[i] = 'УБЫТОК';
+    } else if (vp === 0) {
+      out[i] = 'C (5% прибыли)';
+    } else {
+      totalPos += vp;
+      posItems.push({ index: i, profit: vp });
+    }
+  }
+
+  if (totalPos <= 0 || !posItems.length) return out;
+
+  posItems.sort(function (a, b) { return b.profit - a.profit; });
+  let cum = 0;
+  for (let j = 0; j < posItems.length; j++) {
+    const it = posItems[j];
+    const prevShare = cum / totalPos;
+    cum += it.profit;
+    if (prevShare < 0.80) {
+      out[it.index] = 'A (80% прибыли)';
+    } else if (prevShare < 0.95) {
+      out[it.index] = 'B (15% прибыли)';
+    } else {
+      out[it.index] = 'C (5% прибыли)';
+    }
+  }
+  return out;
+}
 function roundPriceUp(price, step) {
   const p = num(price);
   if (p === null || p <= 0) return null;
@@ -352,40 +531,47 @@ function checkActionConstraint(floorPrice, maxActionPrice, actionPrice) {
 }
 
 /**
- * Ленд-кост — полная себестоимость единицы товара на складе.
- *   ЛК = СС × Кратность + Упаковка + Транспорт
+ * Ленд-кост — полная себестоимость единицы товара на складе (с опциональным резервом на брак/хранение).
+ *   ЛК = (СС × Кратность + Упаковка + Транспорт) × (1 + резерв)
  * Кратность нужна, потому что себестоимость в 1С заведена за упаковку
  * (например, за 10 м.п. кромки), а продаётся поштучно.
  *
  * @returns {number|null} null, если не хватает входных данных —
  *   такой товар в расчёт брать НЕЛЬЗЯ (см. правило качества данных в docs/DECISIONS.md)
  */
-function landCost(costPerUnit, multiplicity, packaging, transport) {
+function landCost(costPerUnit, multiplicity, packaging, transport, defectReserveRate) {
   const c = num(costPerUnit);
   const k = num(multiplicity);
   if (c === null || k === null || c <= 0 || k <= 0) return null;
   const p = num(packaging) || 0;      // упаковка может legitimately отсутствовать
   const t = num(transport) || 0;
-  return c * k + p + t;
+  const base = c * k + p + t;
+  const res = toFractionRate(defectReserveRate);
+  if (res !== null && res > 0) {
+    return base * (1 + res);
+  }
+  return base;
 }
 
 /**
  * Логистика FBO, ₽ за единицу.
- * Ozon отдаёт вилку тарифа (мин/макс) — берём середину, как в исходном файле V3.
- *   L_FBO = СРЗНАЧ(магистраль мин; магистраль макс) + Доставка до выдачи
+ * Ozon отдаёт вилку тарифа (мин/макс). Если передана доля продаж в домашнем кластере
+ * (localShare, 0..1, по умолчанию 0.5), тариф взвешивается между min и max:
+ *   L_FBO = (min × localShare + max × (1 − localShare)) + Доставка до выдачи
  */
-function logisticsFbo(transportMin, transportMax, deliveryToCustomer) {
+function logisticsFbo(transportMin, transportMax, deliveryToCustomer, localShare) {
   const a = num(transportMin), b = num(transportMax), d = num(deliveryToCustomer);
   if (a === null || b === null) return null;
-  return (a + b) / 2 + (d || 0);
+  const w = normalizeLocalShare(localShare);
+  return (a * w + b * (1 - w)) + (d || 0);
 }
 
 /**
  * Логистика FBS, ₽ за единицу. Здесь к магистрали добавляется первая миля.
- *   L_FBS = СРЗНАЧ(first_mile мин; макс) + СРЗНАЧ(магистраль мин; макс) + Доставка до выдачи
+ *   L_FBS = СРЗНАЧ(first_mile мин; макс) + (min × localShare + max × (1 − localShare)) + Доставка до выдачи
  */
-function logisticsFbs(firstMileMin, firstMileMax, transportMin, transportMax, deliveryToCustomer) {
-  const base = logisticsFbo(transportMin, transportMax, deliveryToCustomer);
+function logisticsFbs(firstMileMin, firstMileMax, transportMin, transportMax, deliveryToCustomer, localShare) {
+  const base = logisticsFbo(transportMin, transportMax, deliveryToCustomer, localShare);
   if (base === null) return null;
   const f1 = num(firstMileMin), f2 = num(firstMileMax);
   if (f1 === null || f2 === null) return base;   // первая миля может быть нулевой
@@ -393,13 +579,12 @@ function logisticsFbs(firstMileMin, firstMileMax, transportMin, transportMax, de
 }
 
 /**
- * ОБРАТНЫЙ РАСЧЁТ — фактическая наценка по известной цене.
+ * ОБРАТНЫЙ РАСЧЁТ — фактическая наценка по известной цене (честная аддитивная формула).
  *
- *   m = (Цена × (1 − Комиссия) × (1 − ДРР) − Логистика − Эквайринг) / Ленд-кост − 1
+ *   m = (Цена × (1 − Комиссия − ДРР) − Логистика − Эквайринг) / Ленд-кост − 1
  *
- * Смысл: из цены покупателя вычитаем то, что забирает Ozon (комиссия),
- * то, что уходит в рекламу (ДРР), логистику и эквайринг. Остаток делим
- * на ленд-кост — получаем наценку.
+ * Смысл: и комиссия Ozon, и ДРР считаются в процентах от полной цены реализации.
+ * Остаток после комиссии, рекламы, логистики и эквайринга делим на ленд-кост.
  *
  * @returns {number|null} доля (0.8133 = 81,33%) или null, если данных не хватает
  */
@@ -410,16 +595,17 @@ function markupFromPrice(price, commissionRate, drrRate, land, logistics, acquir
   if (p === null || c === null || l === null || l <= 0) return null;
   if (c >= 1) return null;                        // комиссия 100%+ — бессмыслица
   const d = num(drrRate) || 0;
+  if (d >= 1) return null;
   const log = num(logistics) || 0;
   const acq = num(acquiring) || 0;
-  return (p * (1 - c) * (1 - d) - log - acq) / l - 1;
+  return (p * (1 - c - d) - log - acq) / l - 1;
 }
 
 /**
- * ПРЯМОЙ РАСЧЁТ — цена покупателя из целевой наценки.
+ * ПРЯМОЙ РАСЧЁТ — цена покупателя из целевой наценки (честная аддитивная формула).
  * Обратна markupFromPrice, получена её алгебраическим обращением:
  *
- *   Цена = (Ленд-кост × (1 + m) + Эквайринг + Логистика) / ((1 − Комиссия) × (1 − ДРР))
+ *   Цена = (Ленд-кост × (1 + m) + Эквайринг + Логистика) / (1 − Комиссия − ДРР)
  *
  * @returns {number|null} цена в ₽
  */
@@ -431,7 +617,7 @@ function priceFromMarkup(markup, commissionRate, drrRate, land, logistics, acqui
   if (c >= 1) return null;
   const d = num(drrRate) || 0;
   if (d >= 1) return null;
-  const denom = (1 - c) * (1 - d);
+  const denom = 1 - c - d;
   if (denom <= 0) return null;
   return (l * (1 + m) + (num(acquiring) || 0) + (num(logistics) || 0)) / denom;
 }
@@ -482,7 +668,7 @@ function markupAtPrice(price, ctx) {
  *   actions         — строки листа «Акции» для проверки ограничений
  */
 function unitEconomics(sku) {
-  const land = landCost(sku.costPerUnit, sku.multiplicity, sku.packaging, sku.transport);
+  const land = landCost(sku.costPerUnit, sku.multiplicity, sku.packaging, sku.transport, sku.defectReserveRate);
   if (land === null) {
     return { ok: false, reason: 'нет ленд-коста: не заданы себестоимость и/или кратность' };
   }
@@ -503,17 +689,34 @@ function unitEconomics(sku) {
   }
   if (c === null || c >= 1) return { ok: false, reason: 'нет комиссии или она ≥ 100%' };
 
-  const dRaw = sku.drrRate !== undefined ? sku.drrRate : sku.drr;
-  const d = num(dRaw) || 0;
+  const drrInfo = (sku.salesDrrPct !== undefined || sku.salesAdSpend !== undefined || sku.drrSheetPct !== undefined)
+    ? resolveItemDrr(
+        {
+          salesDrrPct: sku.salesDrrPct,
+          salesAdSpend: sku.salesAdSpend,
+          salesRevenue: sku.salesRevenue !== undefined ? sku.salesRevenue : sku.revenue,
+          drrSheetPct: sku.drrSheetPct
+        },
+        sku.drrRate !== undefined ? sku.drrRate : sku.drr,
+        sku.maxDrrCap
+      )
+    : {
+        rate: num(sku.drrRate !== undefined ? sku.drrRate : sku.drr) || 0,
+        percent: Math.round((num(sku.drrRate !== undefined ? sku.drrRate : sku.drr) || 0) * 10000) / 100,
+        source: 'Параметры!B4',
+        warning: null
+      };
+  const d = drrInfo.rate;
+  const localShare = normalizeLocalShare(sku.localShare);
 
   let directLog = num(sku.logistics);
+  const scheme = sku.scheme === 'FBO' || sku.scheme === 'FBS'
+    ? sku.scheme
+    : ((num(sku.stockFbo) || 0) > 0 ? 'FBO' : 'FBS');
   if (directLog === null) {
-    const scheme = sku.scheme === 'FBO' || sku.scheme === 'FBS'
-      ? sku.scheme
-      : ((num(sku.stockFbo) || 0) > 0 ? 'FBO' : 'FBS');
     directLog = scheme === 'FBO'
-      ? logisticsFbo(sku.fboMin, sku.fboMax, sku.fboDeliv)
-      : logisticsFbs(sku.firstMileMin, sku.firstMileMax, sku.fbsMin, sku.fbsMax, sku.fbsDeliv);
+      ? logisticsFbo(sku.fboMin, sku.fboMax, sku.fboDeliv, localShare)
+      : logisticsFbs(sku.firstMileMin, sku.firstMileMax, sku.fbsMin, sku.fbsMax, sku.fbsDeliv, localShare);
   }
   directLog = directLog || 0;
 
@@ -527,7 +730,7 @@ function unitEconomics(sku) {
 
   const returnTariff = num(sku.returnTariff !== undefined
     ? sku.returnTariff
-    : (sku.scheme === 'FBO' ? sku.returnFbo : sku.returnFbs)) || 0;
+    : (scheme === 'FBO' ? sku.returnFbo : sku.returnFbs)) || 0;
   const returnCost = buyoutInfo.blocked ? null : returnCostPerUnit(returnTariff, buyoutInfo.rate);
   const log = returnCost !== null ? (directLog + returnCost) : directLog;
 
@@ -543,6 +746,7 @@ function unitEconomics(sku) {
   const effTargetMarkup = targetCascade.rate !== null ? targetCascade.rate : num(sku.targetMarkup);
   const effMinMarkup = minCascade.rate !== null ? minCascade.rate : num(sku.minMarkup);
 
+  const h = headroom(c, d);
   const priceBlocked = Boolean(buyoutInfo.blocked);
 
   const mPrice = !priceBlocked ? markupFromPrice(curPriceVal, c, d, land, log, acq) : null;
@@ -564,6 +768,29 @@ function unitEconomics(sku) {
     ? recommendedOldPrice(targetRounded !== null ? targetRounded : target, sku.oldPriceMarkup, step)
     : null;
 
+  // --- Сравнение FBO vs FBS (Идея 3) ---
+  let fboTargetRounded = null;
+  let fboAdvantageRub = null;
+  if (!priceBlocked && sku.fboMin !== undefined && sku.fboMax !== undefined) {
+    const fboDirLog = logisticsFbo(sku.fboMin, sku.fboMax, sku.fboDeliv, localShare);
+    const fboRetTariff = num(sku.returnFbo !== undefined ? sku.returnFbo : sku.returnTariff) || 0;
+    const fboRetCost = returnCostPerUnit(fboRetTariff, buyoutInfo.rate) || 0;
+    const fboCommInfo = resolveCommissionRate(
+      sku.factCommissionRate,
+      sku.fboCommissionRate !== undefined ? sku.fboCommissionRate : c,
+      'FBO'
+    );
+    const fboC = fboCommInfo.rate !== null ? fboCommInfo.rate : c;
+    if (fboDirLog !== null) {
+      const fboTargetRaw = priceFromMarkup(effTargetMarkup, fboC, d, land, fboDirLog + fboRetCost, acq);
+      fboTargetRounded = (step !== null && step > 0) ? roundPriceUp(fboTargetRaw, step) : fboTargetRaw;
+      const curTarget = targetRounded !== null ? targetRounded : target;
+      if (fboTargetRounded !== null && curTarget !== null) {
+        fboAdvantageRub = Math.round((curTarget - fboTargetRounded) * 100) / 100;
+      }
+    }
+  }
+
   const curNum = num(curPriceVal);
   const effectiveTarget = targetRounded !== null ? targetRounded : target;
   const deltaRub = (!priceBlocked && curNum !== null && effectiveTarget !== null)
@@ -574,8 +801,9 @@ function unitEconomics(sku) {
     : null;
 
   const profitBeforeTax = (!priceBlocked && curNum !== null)
-    ? (curNum * (1 - c) * (1 - d) - log - acq - land)
+    ? (curNum * (1 - c - d) - log - acq - land)
     : null;
+  const rosMargin = marginFromPrice(profitBeforeTax, curNum);
   const taxes = taxBreakdown(curNum, profitBeforeTax, sku.vatRate, sku.profitTaxRate);
 
   const deliveredUnits = num(sku.deliveredUnits !== undefined ? sku.deliveredUnits : sku.orderedUnits);
@@ -584,11 +812,16 @@ function unitEconomics(sku) {
     ? Math.round(profitBeforeTax * deliveredUnits * 100) / 100
     : null;
 
+  const stockFbo = num(sku.stockFbo) || 0;
+  const stockFbs = num(sku.stockFbs) || 0;
+  const totalStock = stockFbo + stockFbs;
+
   const effectiveCategory = (sku.category !== undefined && sku.category !== null && String(sku.category).trim() !== '')
     ? String(sku.category).trim()
     : inferProductGroup(sku.offerId, sku.name);
 
   const effectiveFloorForActions = floorRounded !== null ? floorRounded : floor;
+  const minPriceProtection = checkMinPriceProtection(minPriceVal, effectiveFloorForActions);
   const actionChecks = Array.isArray(sku.actions)
     ? sku.actions.map(function (act) {
         const chk = checkActionConstraint(
@@ -602,8 +835,9 @@ function unitEconomics(sku) {
 
   const warnings = [
     buyoutInfo.warning,
+    drrInfo.warning,
     !isFeasible(c, d)
-      ? 'комиссия и ДРР вместе забирают ' + r0((1 - headroom(c, d)) * 100) +
+      ? 'комиссия и ДРР вместе забирают ' + r0((c + d) * 100) +
         '% цены — расчёт формально верен, но цена выйдет нерыночной' : null,
     (num(minPriceVal) !== null && floor !== null && num(minPriceVal) < floor)
       ? 'min_price в Ozon ниже нашего ограничения для акций' : null,
@@ -617,6 +851,7 @@ function unitEconomics(sku) {
     ok: true,
     category: effectiveCategory,
     landCost: land,
+    localShare,
     directLogistics: directLog,
     returnTariff,
     buyoutRate: buyoutInfo.rate,
@@ -628,12 +863,14 @@ function unitEconomics(sku) {
     commissionRate: c,
     commissionSource,
     drrRate: d,
+    drrSource: drrInfo.source,
     priceBlocked,
     markup: {
-      byCurrentPrice: mPrice,     // наценка по цене с акцией
+      byCurrentPrice: mPrice,     // наценка по цене с акцией (ROI)
       byNoActionPrice: mNoAction, // по цене без акции
       byOldPrice: mOld,           // по зачёркнутой
       byMinPrice: mMin,           // по ограничению для акций
+      marginByCurrentPrice: rosMargin, // маржинальность цены с акцией (ROS)
       targetRate: effTargetMarkup,
       minRate: effMinMarkup,
       source: targetCascade.source || minCascade.source
@@ -648,7 +885,15 @@ function unitEconomics(sku) {
       breakEvenRounded,
       recommendedOldPrice: recOldPrice,
       deltaRub,
-      deltaPercent
+      deltaPercent,
+      fboTargetRounded,
+      fboAdvantageRub
+    },
+    minPriceProtection,
+    stock: {
+      fbo: stockFbo,
+      fbs: stockFbs,
+      total: totalStock
     },
     salesVolume: {
       deliveredUnits: deliveredUnits !== null ? deliveredUnits : 0,
@@ -658,7 +903,7 @@ function unitEconomics(sku) {
     taxes,
     actionChecks,
     // запас цены — индикатор жизнеспособности (см. headroom)
-    headroom: headroom(c, d),
+    headroom: h,
 
     // флаги, которые в таблице были условным форматированием
     warnings
@@ -667,12 +912,13 @@ function unitEconomics(sku) {
 
 /**
  * Запас цены: какую долю цены продавца товар переживает после комиссии и ДРР.
- *   headroom = (1 − Комиссия) × (1 − ДРР)
+ *   headroom = 1 − Комиссия − ДРР
  */
 function headroom(commissionRate, drrRate) {
   const c = num(commissionRate), d = num(drrRate) || 0;
   if (c === null || c >= 1 || d >= 1) return null;
-  return (1 - c) * (1 - d);
+  const h = 1 - c - d;
+  return h > 0 ? h : 0;
 }
 
 /** Порог, ниже которого расчёт формально верен, но экономически бессмыслен. */
@@ -700,6 +946,12 @@ module.exports = {
   resolveBuyoutRate,
   returnCostPerUnit,
   resolveMarkupCascade,
+  normalizeLocalShare,
+  isHomeCluster,
+  resolveItemDrr,
+  marginFromPrice,
+  checkMinPriceProtection,
+  classifyAbcByProfit,
   roundPriceUp,
   recommendedOldPrice,
   inferProductGroup,
