@@ -389,4 +389,22 @@ calculateUnitEconomics();
 const rowsDrrSub1 = calcSh.getRange(CFG.CALC_DATA_START_ROW, 1, 6, CFG.CALC_COLS).getValues();
 near(rowsDrrSub1[1][18], 0.76, 0.01, 'Расчёт!S (Kleiberit при ДРР 0,76%): ДРР < 1% должен оставаться 0,76%, а не 50%');
 
+// Проверяем лист «Сопоставление» (A: Номенклатура Озон | B: Offer id | C: Номенклатура 1С | D: Код)
+const mapSh = SpreadsheetApp.getSheetByName('Сопоставление');
+assert(Boolean(mapSh) && mapSh.getLastRow() >= 7, 'Лист «Сопоставление» должен создаваться и предзаполняться из «Номенклатуры»');
+// Очистим код 1С у Mirka-Без-СС в Номенклатуре и зададим его через лист «Сопоставление» (вставка таблицы Ctrl+V)
+nom.getRange(7, 4, 1, 3).setValues([['', '', '']]);
+mapSh.clear();
+mapSh.getRange(1, 1, 2, 4).setValues([
+  ['Номенклатура Озон', 'Offer id', 'Номенклатура 1С', 'Код'],
+  ['Круг Mirka', 'Mirka-Без-СС', 'Мирка из Сопоставления', '00000000006']
+]);
+const resFromMap = calculateUnitEconomics();
+assert(resFromMap.sync1c.filledCode1c === 1 && resFromMap.sync1c.filledCost === 1,
+  'Сопоставление → Номенклатура → Себестоимость 1С МСК: Код 1С и СС подтянулись за один проход');
+const nomMirka = nom.getRange(7, 4, 1, 3).getValues()[0];
+assert(nomMirka[0] === '00000000006' && nomMirka[1] === 'Мирка из Сопоставления' && Math.abs(nomMirka[2] - 120) < 0.01,
+  'Номенклатура!D:F для Mirka должны обновиться из «Сопоставления» и «Себестоимость 1С МСК»');
+onOpen();
+
 console.log('РАСЧЁТ Э2/Э3 И UX/UI (calculation.js): ВСЕ ПРОВЕРКИ ПРОШЛИ ✓');

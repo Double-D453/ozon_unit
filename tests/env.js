@@ -198,7 +198,23 @@ function makeEnv() {
       return sheetOrder.filter(function (k) { return Boolean(sheets[k]); }).map(function (k) { return sheets[k]; });
     },
     flush: function () {},
-    getUi: function () { return { alert: function () {}, ButtonSet: { YES_NO: 1, OK: 1 }, Button: { YES: 1, OK: 1 } }; },
+    getUi: function () {
+      const makeMenu = function () {
+        const m = {
+          addItem: function () { return m; },
+          addSeparator: function () { return m; },
+          addSubMenu: function () { return m; },
+          addToUi: function () { return m; }
+        };
+        return m;
+      };
+      return {
+        alert: function () {},
+        createMenu: function () { return makeMenu(); },
+        ButtonSet: { YES_NO: 1, OK: 1, OK_CANCEL: 1 },
+        Button: { YES: 1, OK: 1 }
+      };
+    },
     _get: function (n) { return registerSheet_(n); }
   };
 

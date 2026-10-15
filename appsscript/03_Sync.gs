@@ -1863,38 +1863,54 @@ function testConnections() {
 // ============================================================
 
 function onOpen() {
-  SpreadsheetApp.getUi()
+  const ui = SpreadsheetApp.getUi();
+  const mainMenu = ui
     .createMenu('Ozon Unit')
-    .addItem('Синхронизировать данные из Ozon', 'menuSyncFact')
-    .addItem('Синхронизировать продажи (аналитика)', 'menuSyncSales')
-    .addItem('Синхронизировать рекламу (ДРР)', 'menuSyncDrr')
-    .addItem('Синхронизировать акции', 'menuSyncActions')
-    .addItem('Обновить СС и кратность из листов 1С', 'menuSync1c')
-    .addItem('Рассчитать юнит-экономику (Э2/Э3)', 'menuCalculate')
-    .addItem('Навести порядок и обновить дизайн таблицы', 'menuApplyUx')
+    .addItem('🔄 Рассчитать юнит-экономику (1С + Э2/Э3)', 'menuCalculate')
+    .addItem('📥 Обновить данные из 1С (Сопоставление + СС + Кратность)', 'menuSync1c')
     .addSeparator()
-    .addItem('Добавить недостающие SKU в базу', 'menuAddMissing')
-    .addItem('Обновить инструкцию в таблице', 'menuRefreshInstruction')
-    .addItem('Проверить подключение', 'menuTest')
-    .addItem('Проверить комиссию по отчёту о реализации', 'menuDiagCommission')
-    .addItem('Снять сырые поля комиссии (без изменения B14)', 'menuDiagCommissionSourceRaw')
-    .addItem('Проверить права API-ключа', 'menuDiagRoles')
-    .addItem('Сверить цены (диагностика)', 'menuDiagPrices')
-    .addItem('Диагностика ДРР (сырой ответ)', 'menuDiagDrr')
-    .addSeparator()
-    .addItem('Настроить ключи доступа', 'menuKeys')
-    .addItem('Показать лог', 'menuLog')
-    .addToUi();
+    .addItem('1. Синхронизировать Факт Ozon (цены, тарифы, остатки)', 'menuSyncFact')
+    .addItem('2. Синхронизировать комиссию факт (реализация)', 'menuDiagCommission')
+    .addItem('3. Синхронизировать продажи и географию', 'menuSyncSales')
+    .addItem('4. Синхронизировать рекламу (ДРР)', 'menuSyncDrr')
+    .addItem('5. Синхронизировать акции и бустинг', 'menuSyncActions');
+
+  if (typeof ui.createMenu === 'function' && typeof mainMenu.addSubMenu === 'function') {
+    const serviceMenu = ui
+      .createMenu('⚙️ Сервис и диагностика')
+      .addItem('Настроить ключи доступа API', 'menuKeys')
+      .addItem('Показать лог работы', 'menuLog')
+      .addSeparator()
+      .addItem('Навести порядок и обновить дизайн таблицы', 'menuApplyUx')
+      .addItem('Обновить инструкцию в таблице', 'menuRefreshInstruction')
+      .addItem('Добавить недостающие SKU в базу вручную', 'menuAddMissing')
+      .addSeparator()
+      .addItem('Проверить подключение к Ozon API', 'menuTest')
+      .addItem('Проверить права API-ключа (/v1/roles)', 'menuDiagRoles')
+      .addItem('Сверить цены (диагностика)', 'menuDiagPrices')
+      .addItem('Снять сырые поля комиссии (без изменения B14)', 'menuDiagCommissionSourceRaw')
+      .addItem('Диагностика ДРР (сырой ответ)', 'menuDiagDrr');
+    mainMenu.addSeparator().addSubMenu(serviceMenu);
+  } else {
+    mainMenu
+      .addSeparator()
+      .addItem('Навести порядок и обновить дизайн таблицы', 'menuApplyUx')
+      .addItem('Настроить ключи доступа', 'menuKeys')
+      .addItem('Показать лог', 'menuLog');
+  }
+  mainMenu.addToUi();
 }
 
 function formatCalcAlert_(res) {
   if (!res || typeof res !== 'object') return 'Готово.';
   const s1c = res.sync1c || {};
-  const s1cLine = (s1c.updatedCost || s1c.filledCost || s1c.filledMult || s1c.updatedMult)
-    ? '• Из листов 1С → Номенклатура: СС обновлена у ' + (s1c.updatedCost || 0) +
+  const s1cChanged = (s1c.filledCode1c || s1c.updatedCode1c || s1c.updatedCost || s1c.filledCost || s1c.filledMult || s1c.updatedMult);
+  const s1cLine = s1cChanged
+    ? '• Из листов 1С → Номенклатура: сопоставление Код 1С (' +
+      ((s1c.filledCode1c || 0) + (s1c.updatedCode1c || 0)) + ' SKU), СС обновлена у ' + (s1c.updatedCost || 0) +
       ' SKU, новая СС у ' + (s1c.filledCost || 0) +
-      ' SKU, кратность дозаполнена у ' + ((s1c.filledMult || 0) + (s1c.updatedMult || 0)) + ' SKU'
-    : '• Из листов 1С → Номенклатура: все значения СС и кратности уже актуальны';
+      ' SKU, кратность у ' + ((s1c.filledMult || 0) + (s1c.updatedMult || 0)) + ' SKU'
+    : '• Из листов 1С → Номенклатура: все значения сопоставления, СС и кратности уже актуальны';
   return [
     'Расчёт юнит-экономики (Э2/Э3) завершён (' + (res.updatedAt || '') + '):',
     '',

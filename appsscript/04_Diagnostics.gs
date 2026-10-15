@@ -45,6 +45,7 @@ function ensureSheets() {
   sheet_(CFG.SHEETS.PROBLEMS, ['Offer id', 'Наименование', 'Что не хватает', 'Что делать']);
   sheet_(CFG.SHEETS.COMM, commHeaders_());
   if (typeof calcSettingsHeaders_ === 'function') sheet_(CFG.SHEETS.CALC_SETTINGS, calcSettingsHeaders_());
+  if (typeof ensureMappingSheet_ === 'function') ensureMappingSheet_(ss_());
   if (typeof calcHeaders_ === 'function') sheet_(CFG.SHEETS.CALC, calcHeaders_());
   logMsg_('INFO', 'ensureSheets: служебные листы на месте (' +
     ss_().getSheets().length + ' листов в файле)');
