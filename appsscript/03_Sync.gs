@@ -120,11 +120,11 @@ function mskRange_(periodDays) {
   return { from: day(-p + 1), to: day(1), period: p };
 }
 
-/** Шапка листа «Факт Ozon» (24 колонки, A..X) — в новой терминологии ЛК Ozon (сентябрь 2026). */
+/** Шапка листа «Факт Ozon» (24 колонки, A..X). */
 function factHeaders_() {
   return [
-    'Offer id', 'Предельная цена (сейчас), ₽', 'Предельная цена без акций, ₽', 'Зачёркнутая цена, ₽',
-    'Ограничение для акций в Ozon, ₽', 'НДС, %', 'Комиссия FBO, %', 'Комиссия FBS, %',
+    'Offer id', 'Цена с акцией, ₽', 'Цена без акции, ₽', 'Зачёркнутая цена, ₽',
+    'Ограничение для акций, ₽', 'НДС, %', 'Комиссия FBO, %', 'Комиссия FBS, %',
     'Логистика FBO мин', 'Логистика FBO макс', 'Доставка FBO',
     'Обработка FBS мин', 'Обработка FBS макс', 'Логистика FBS мин', 'Логистика FBS макс', 'Доставка FBS',
     'Эквайринг, ₽', 'Остаток Ozon', 'Остаток свои', 'Дата среза',
@@ -308,9 +308,8 @@ function syncFact() {
     const commDisc = ensureParams_();
 
     fillNomSku_(nom, info);
-    fillNomCategory_(nom, info);
 
-    // ---- дозаполняем новые строки: SKU, название, остаток, схема, категория ----
+    // ---- дозаполняем новые строки: SKU, название, остаток, схема ----
     if (newRowStart) {
       const filledRows = missingInBase.map(function (oid) {
         const it = info[oid] || {};
@@ -323,7 +322,6 @@ function syncFact() {
         r[11] = st.fbo;
         r[13] = st.fbo > 0 ? 'FBO' : (st.fbs > 0 ? 'FBS' : '');
         r[14] = 'Новый из API';
-        r[CFG.NOM_COL_CAT - 1] = it.category_id ? (isNaN(Number(it.category_id)) ? it.category_id : Number(it.category_id)) : '';
         r[CFG.NOM_COL_SYNC - 1] = 'новый из Ozon — нет данных 1С';
         return r;
       });
@@ -513,7 +511,9 @@ function syncActions() {
       logMsg_('WARN', 'Акции: не удалось построить карту товаров: ' + e.message);
     }
 
-    const headers = actHeaders_();
+    const headers = ['Акция (ID)', 'Название акции', 'Offer id', 'Product id', 'Цена до акции, ₽',
+                     'Цена акции, ₽', 'Макс. допустимая цена, ₽', 'Мин. кол-во', 'В акции, шт',
+                     'Способ', 'Дата среза'];
     const sh = sheet_(CFG.SHEETS.ACT, headers);
     const today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'dd.MM.yyyy HH:mm');
 
@@ -533,7 +533,7 @@ function syncActions() {
           const pid = String(p.id || p.product_id || '');
           const offer = p.offer_id || idMap[pid] || '';
           if (offer) mapped++;
-          const row = [
+          out.push([
             id, title, offer, pid,
             Number(p.price || 0),
             Number(p.action_price || 0),
@@ -542,9 +542,7 @@ function syncActions() {
             Number(p.stock || 0),
             p.add_mode || '',
             today
-          ];
-          while (row.length < headers.length) row.push('');
-          out.push(row);
+          ]);
         });
         logMsg_('INFO', 'Акция ' + id + ' («' + title + '»' + (dateEnd ? ', до ' + dateEnd : '') + '): товаров ' +
           products.length + ', сопоставлено с нашим артикулом — ' + mapped);
@@ -607,61 +605,6 @@ function fillNomSku_(nom, info) {
 }
 
 /**
- * Дозаполняет пустую колонку P «Номенклатуры» (Категория, CFG.NOM_COL_CAT) значением
- * category_id / description_category_id из Ozon без перезаписи существующих значений.
- */
-function fillNomCategory_(nom, info) {
-  try {
-    const colIdx = CFG.NOM_COL_CAT || 16;
-    if (nom.getMaxColumns() < colIdx) return;
-    const n = nom.getLastRow() - 1;
-    if (n < 1) return;
-    const offers = nom.getRange(2, 1, n, 3).getValues();
-    const curCats = nom.getRange(2, colIdx, n, 1).getValues();
-
-    let filled = 0, haveCat = 0;
-    const col = offers.map(function (r, idx) {
-      const oid = String(r[0] === undefined || r[0] === null ? '' : r[0]).trim();
-      const name = String(r[2] === undefined || r[2] === null ? '' : r[2]).trim();
-      const cur = (curCats[idx] && curCats[idx][0] !== undefined && curCats[idx][0] !== null)
-        ? curCats[idx][0]
-        : '';
-      if (String(cur).trim() !== '') { haveCat++; return [cur]; }
-      const cat = (info[oid] || {}).category_id;
-      const fallbackGrp = typeof inferProductGroup_ === 'function' ? inferProductGroup_(oid, name || (info[oid] || {}).name || '') : '';
-      const resolved = (cat !== undefined && cat !== null && String(cat).trim() !== '') ? cat : fallbackGrp;
-      if (resolved === undefined || resolved === null || String(resolved).trim() === '') return [cur];
-      filled++; haveCat++;
-      return [isNaN(Number(resolved)) ? String(resolved).trim() : Number(resolved)];
-    });
-
-    if (!filled) return;
-
-    const formulas = nom.getRange(2, colIdx, n, 1).getFormulas();
-    const hasFormula = formulas.some(function (r) { return String(r[0] || '') !== ''; });
-    if (hasFormula) {
-      logMsg_('WARN', 'Номенклатура: в колонке P (Категория) есть формулы — перезапись пропущена (' +
-        filled + ' пустых ячеек)');
-      return;
-    }
-    nom.getRange(2, colIdx, n, 1).setValues(col);
-    logMsg_('INFO', 'Номенклатура: дозаполнено категорий (P) — ' + filled +
-      ' (всего с категорией: ' + haveCat + ' из ' + n + ')');
-  } catch (e) {
-    logMsg_('WARN', 'Номенклатура: не удалось дозаполнить категорию (P) — ' + e.message);
-  }
-}
-
-function actHeaders_() {
-  return CFG.ACT_HEADERS || [
-    'Акция (ID)', 'Название акции', 'Offer id', 'Product id', 'Предельная цена без акций, ₽',
-    'Предельная цена (в акции), ₽', 'Цена для мин. бустинга (лимит Ozon), ₽', 'Мин. кол-во', 'В акции, шт',
-    'Способ', 'Дата среза',
-    'Мин. Предельная цена (наш пол), ₽', 'Запас до цены мин. бустинга, ₽', 'Наценка по Предельной цене, %', 'Статус и решение по бустингу'
-  ];
-}
-
-/**
  * Добавляет в «Номенклатуру» товары, которые есть в магазине Ozon,
  * но которых нет в нашей базе (по итогам прогона №3 — 202 штуки).
  * Существующие строки НЕ меняются, только дописываются в конец:
@@ -708,7 +651,6 @@ function addMissingSkus() {
       row[11] = st.fbo;                                     // L Остаток Ozon (FBO)
       row[13] = st.fbo > 0 ? 'FBO' : (st.fbs > 0 ? 'FBS' : '');  // N Схема
       row[14] = 'Новый из API — нет в 1С';                  // O Статус
-      row[CFG.NOM_COL_CAT - 1] = it.category_id ? (isNaN(Number(it.category_id)) ? it.category_id : Number(it.category_id)) : ''; // P Категория
       row[CFG.NOM_COL_SYNC - 1] = 'новый из Ozon — нет данных 1С'; // Q Синк с Ozon
       return row;
     });
@@ -763,79 +705,6 @@ function nomSkuMap_() {
     if (oid && sku) map[sku] = oid;
   });
   return map;
-}
-
-/**
- * Определяет, относится ли кластер/регион доставки к домашнему кластеру склада (по умолчанию МСК),
- * либо совпадает с кластером отгрузки.
- */
-function isHomeClusterSales_(clusterTo, clusterFrom, warehouse) {
-  const to = String(clusterTo || '').trim().toLowerCase();
-  if (!to) return null;
-  const from = String(clusterFrom || '').trim().toLowerCase();
-  if (from && to === from) return true;
-  const wh = String(warehouse || 'МСК').trim().toLowerCase();
-  if (wh === '' || wh.indexOf('мск') !== -1 || wh.indexOf('моск') !== -1) {
-    return /москв|мск|московск|твер|калуж|тул|рязан|владимир|смоленск|ярослав|костром|иванов|брянск|орёл|орел|тамбов|липецк|воронеж|цфо|центр/.test(to);
-  }
-  return to.indexOf(wh) !== -1;
-}
-
-/**
- * Сбор географии продаж по отправлениям FBO/FBS за период для расчёта доли локальных продаж
- * в домашнем кластере (например, МСК) по каждому SKU и по магазину в целом.
- */
-function collectSalesGeoMap_(sinceIso, toIso) {
-  const out = { bySku: {}, byOffer: {}, totalLocal: 0, totalGeo: 0, storeLocalSharePct: null };
-  let postings = [];
-  try {
-    if (typeof fboPostingsWithFinance_ === 'function') {
-      postings = postings.concat(fboPostingsWithFinance_(sinceIso, toIso) || []);
-    }
-  } catch (e1) {}
-  try {
-    if (typeof fbsPostingsWithFinance_ === 'function') {
-      postings = postings.concat(fbsPostingsWithFinance_(sinceIso, toIso) || []);
-    }
-  } catch (e2) {}
-
-  if (!postings.length) return out;
-
-  postings.forEach(function (p) {
-    if (!p) return;
-    const fin = p.financial_data || {};
-    const an = p.analytics_data || {};
-    const clusterTo = String(fin.cluster_to || an.region || an.city || '').trim();
-    const clusterFrom = String(fin.cluster_from || an.warehouse_name || '').trim();
-    if (!clusterTo) return;
-    const isLocal = isHomeClusterSales_(clusterTo, clusterFrom, 'МСК');
-    if (isLocal === null) return;
-
-    (p.products || []).forEach(function (pr) {
-      if (!pr) return;
-      const qty = Math.max(1, Number(pr.quantity) || 1);
-      const sku = String(pr.sku || '').replace(/\.0+$/, '');
-      const oid = String(pr.offer_id || '').trim();
-
-      out.totalGeo += qty;
-      if (isLocal) out.totalLocal += qty;
-
-      const touch = function (map, key) {
-        if (!key) return;
-        if (!map[key]) map[key] = { local: 0, total: 0, clusters: {} };
-        map[key].total += qty;
-        if (isLocal) map[key].local += qty;
-        map[key].clusters[clusterTo] = (map[key].clusters[clusterTo] || 0) + qty;
-      };
-      touch(out.bySku, sku);
-      touch(out.byOffer, oid);
-    });
-  });
-
-  if (out.totalGeo > 0) {
-    out.storeLocalSharePct = Math.round((out.totalLocal / out.totalGeo) * 10000) / 100;
-  }
-  return out;
 }
 
 /**
@@ -919,8 +788,6 @@ function syncSales(days) {
 
     rows.sort(function (a, b) { return Number(b[3]) - Number(a[3]); });
 
-    const geo = collectSalesGeoMap_(rng.from, rng.to);
-
     const sh = sheet_(CFG.SHEETS.SALES, salesHeaders_());
     const need = rows.length + 1;
     if (sh.getMaxRows() < need) sh.insertRowsAfter(sh.getMaxRows(), need - sh.getMaxRows());
@@ -941,35 +808,6 @@ function syncSales(days) {
       ['Период', label],
       ['Обновлено', today]
     ]).setFontWeight('bold');
-
-    // География продаж по кластерам (колонки R..U = 18..21 + сводная доля в O9:P9)
-    try {
-      if (sh.getMaxColumns() < 21 && typeof sh.insertColumnsAfter === 'function') {
-        sh.insertColumnsAfter(sh.getMaxColumns(), 21 - sh.getMaxColumns());
-      }
-      sh.getRange(9, 15, 1, 2).setValues([[
-        'Доля кластера МСК, %',
-        geo.storeLocalSharePct !== null ? geo.storeLocalSharePct : 'нет гео-данных'
-      ]]).setFontWeight('bold');
-      sh.getRange(1, 18, 1, 4).setValues([[
-        'Заказов в МСК, шт', 'Заказов с гео, шт', 'Доля кластера МСК, %', 'Топ кластер доставки'
-      ]]).setFontWeight('bold');
-      if (rows.length) {
-        const geoRows = rows.map(function (r) {
-          const oid = String(r[0] || '').trim();
-          const sku = String(r[1] || '').trim();
-          const g = geo.byOffer[oid] || geo.bySku[sku] || null;
-          if (!g || !g.total) return ['', '', '', ''];
-          let topCluster = '', topCnt = 0;
-          Object.keys(g.clusters || {}).forEach(function (cl) {
-            if (g.clusters[cl] > topCnt) { topCnt = g.clusters[cl]; topCluster = cl; }
-          });
-          const pct = Math.round((g.local / g.total) * 10000) / 100;
-          return [g.local, g.total, pct, topCluster];
-        });
-        sh.getRange(2, 18, geoRows.length, 4).setValues(geoRows);
-      }
-    } catch (eg) {}
 
     logMsg_('INFO', 'Продажи: SKU с данными ' + rows.length + ', выручка ' + Math.round(sumRev) +
       ' ₽, заказано ' + sumUnits + ' шт за ' + label + '. Не нашлось в «Номенклатуре»: ' + noOffer +
@@ -1772,8 +1610,6 @@ function onOpen() {
     .addItem('Синхронизировать продажи (аналитика)', 'menuSyncSales')
     .addItem('Синхронизировать рекламу (ДРР)', 'menuSyncDrr')
     .addItem('Синхронизировать акции', 'menuSyncActions')
-    .addItem('Рассчитать юнит-экономику (Э2/Э3)', 'menuCalculate')
-    .addItem('Навести порядок и обновить дизайн таблицы', 'menuApplyUx')
     .addSeparator()
     .addItem('Добавить недостающие SKU в базу', 'menuAddMissing')
     .addItem('Обновить инструкцию в таблице', 'menuRefreshInstruction')
@@ -1789,55 +1625,10 @@ function onOpen() {
     .addToUi();
 }
 
-function formatCalcAlert_(res) {
-  if (!res || typeof res !== 'object') return 'Готово.';
-  return [
-    'Расчёт юнит-экономики (Э2/Э3) завершён (' + (res.updatedAt || '') + '):',
-    '',
-    '• Всего артикулов в базе: ' + (res.total || 0) +
-      ' (товарных групп: ' + (res.productGroupsCount || 0) + ')',
-    '• Рассчитано цен: ' + (res.calculated || 0) +
-      ' (пропущено без СС/кратности: ' + (res.skippedNoCost || 0) +
-      ', блок при выкупе 0%: ' + (res.blockedZeroBuyout || 0) + ')',
-    '• Комиссия: из «Комиссия факт» — ' + (res.commFromFact || 0) +
-      ', из «Факт Ozon» — ' + (res.commFromFallback || 0),
-    '• Выкуп: из «Продажи» — ' + (res.buyoutFromSales || 0) +
-      ', по умолчанию (Параметры!B8) — ' + (res.buyoutFallback || 0),
-    '• Продажи за период: выкуплено ' + (res.totalDeliveredUnits || 0) +
-      ' шт (' + (res.skusWithSales || 0) + ' SKU), прибыль на объём: ' + (res.totalVolumeProfit || 0) + ' ₽',
-    '• Наценка ниже минимальной: ' + (res.belowMinMarkup || 0) + ' SKU',
-    '• Цена ниже целевой: ' + (res.belowTargetPrice || 0) + ' SKU',
-    '• Акции и бустинг (проверено строк: ' + (res.actionsChecked || 0) + '):',
-    '  — проходят лимит мин. бустинга Ozon: ' + (res.actionsAllowed || 0) +
-      (res.actionsBelowFloor ? ' (из них текущая Предельная ниже нашего пола: ' + res.actionsBelowFloor + ')' : ''),
-    '  — ВЫЙТИ ИЗ АКЦИИ (наш пол > Цены для мин. бустинга): ' + (res.actionsBlocked || 0),
-    '',
-    'Листы «Расчёт» (56 кол. A..BD, KPI-шапка, группы [+], светофор), «Акции» и «Проект» обновлены.'
-  ].join('\n');
-}
-
 function menuSyncFact()    { ui_('Синхронизация данных', syncFact); }
 function menuSyncSales()   { ui_('Продажи по SKU', syncSales14); }
 function menuSyncActions() { ui_('Синхронизация акций', syncActions); }
 function menuSyncDrr()     { ui_('Синхронизация рекламы', syncDrr14); }
-function menuCalculate() {
-  const ui = SpreadsheetApp.getUi();
-  try {
-    const res = calculateUnitEconomics();
-    ui.alert('Расчёт юнит-экономики (Э2/Э3)', formatCalcAlert_(res), ui.ButtonSet.OK);
-  } catch (e) {
-    ui.alert('Расчёт юнит-экономики (Э2/Э3)', 'Ошибка: ' + e.message + '\n\nПодробности — меню «Показать лог».', ui.ButtonSet.OK);
-  }
-}
-function menuApplyUx() {
-  const ui = SpreadsheetApp.getUi();
-  try {
-    const res = applyWorkbookUx();
-    ui.alert('Дизайн и порядок вкладок обновлены', formatCalcAlert_(res), ui.ButtonSet.OK);
-  } catch (e) {
-    ui.alert('Дизайн и порядок вкладок', 'Ошибка: ' + e.message + '\n\nПодробности — меню «Показать лог».', ui.ButtonSet.OK);
-  }
-}
 function menuAddMissing()  {
   const ui = SpreadsheetApp.getUi();
   const r = ui.alert('Добавить недостающие SKU',
