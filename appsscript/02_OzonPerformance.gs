@@ -245,57 +245,73 @@ function perfFetchReportCsv_(campaignIds, dateFrom, dateTo) {
 }
 
 /**
- * ПАРАЛЛЕЛЬНЫЙ заказ отчётов. Ozon держит в очереди до 3 заданий, поэтому
- * заказываем сразу несколько пачек и ждём их одновременно — иначе обход
- * campaigns × (генерация отчёта) не влезает в 6 минут Apps Script.
+ * Заказ и получение отчётов по пачкам кампаний.
+ * ВАЖНО: с осени 2026 Ozon Performance API ввёл жёсткое ограничение:
+ * HTTP 429 {"error":"Превышен лимит активных запросов (максимум 1)"}.
+ * Поэтому внутри волны пачки (по 10 кампаний) заказываются строго по очереди:
+ * заказали пачку 1 → дождались state='OK' → скачали → заказали пачку 2 → и т.д.
+ * Так мы никогда не создаём >1 активного отчёта и не теряем пачки на HTTP 429.
  *
- * chunks: [[{id:..}, ...], ...] — не больше CFG.PERF_QUEUE пачек за раз.
- * deadline: timestamp, после которого ждать перестаём.
- * Возвращает [{ids: [...], files: [{file, csv}]}] — только готовые.
+ * chunks: [[{id:..}, ...], ...] — пачки внутри волны.
+ * deadline: timestamp, после которого новые пачки не заказываем и ждать перестаём.
+ * Возвращает [{ids: [...], files: [{file, csv}]}] — только готовые и скачанные.
  */
 function perfReportsParallel_(chunks, dateFrom, dateTo, deadline) {
-  const tasks = [];
-  chunks.forEach(function (ch) {
-    const ids = ch.map(function (c) { return String(c && c.id ? c.id : c); });
-    try {
-      const uuid = perfRequestStatistics_(ids, dateFrom, dateTo);
-      if (uuid) tasks.push({ ids: ids, uuid: uuid, state: 'WAIT' });
-      else logMsg_('WARN', 'Performance: не получен uuid для ' + ids.length + ' кампаний');
-    } catch (e) {
-      logMsg_('ERROR', 'Performance: отчёт не заказан (' + ids.length + ' камп.): ' + e.message);
-    }
-  });
-  if (!tasks.length) return [];
-  logMsg_('DEBUG', 'Performance: заказано отчётов ' + tasks.length + ' (' +
-    tasks.map(function (t) { return t.ids.length; }).reduce(function (a, b) { return a + b; }, 0) + ' камп.)');
-
-  let guard = 0;
-  while (guard++ < 90) {
-    const waiting = tasks.filter(function (t) { return t.state === 'WAIT'; });
-    if (!waiting.length) break;
+  const out = [];
+  for (let cIdx = 0; cIdx < chunks.length; cIdx++) {
     if (Date.now() > deadline) {
-      logMsg_('WARN', 'Performance: время вышло, не дождались отчётов: ' + waiting.length);
+      logMsg_('WARN', 'Performance: время волны вышло до заказа пачки ' + (cIdx + 1) + ' из ' + chunks.length);
       break;
     }
-    Utilities.sleep(CFG.PERF_POLL_MS);
-    waiting.forEach(function (t) {
+    const ch = chunks[cIdx];
+    const ids = ch.map(function (c) { return String(c && c.id ? c.id : c); });
+    let uuid = '';
+    try {
+      uuid = perfRequestStatistics_(ids, dateFrom, dateTo);
+      if (!uuid) {
+        logMsg_('WARN', 'Performance: не получен uuid для ' + ids.length + ' кампаний');
+        continue;
+      }
+    } catch (e) {
+      logMsg_('ERROR', 'Performance: отчёт не заказан (' + ids.length + ' камп.): ' + e.message);
+      continue;
+    }
+
+    logMsg_('DEBUG', 'Performance: заказан отчёт ' + (cIdx + 1) + '/' + chunks.length +
+      ' (' + ids.length + ' камп., uuid=' + uuid + ')');
+
+    let finalState = 'WAIT';
+    let guard = 0;
+    while (guard++ < 90) {
+      if (Date.now() > deadline) {
+        logMsg_('WARN', 'Performance: время вышло, не дождались отчёта ' + uuid);
+        break;
+      }
+      Utilities.sleep(CFG.PERF_POLL_MS);
       try {
-        const st = perfReportState_(t.uuid);
-        if (st === 'OK') t.state = 'OK';
-        else if (st === 'ERROR' || st === 'FAILED' || st === 'CANCELED') {
-          t.state = 'ERROR';
-          logMsg_('ERROR', 'Performance: отчёт ' + t.uuid + ' — ошибка (state=' + st + ')');
+        const st = perfReportState_(uuid);
+        if (st === 'OK') {
+          finalState = 'OK';
+          break;
+        } else if (st === 'ERROR' || st === 'FAILED' || st === 'CANCELED') {
+          finalState = 'ERROR';
+          logMsg_('ERROR', 'Performance: отчёт ' + uuid + ' — ошибка (state=' + st + ')');
+          break;
         }
       } catch (e) { /* остаётся WAIT, попробуем на следующем круге */ }
-    });
-  }
+    }
 
-  const out = [];
-  tasks.forEach(function (t) {
-    if (t.state !== 'OK') return;
-    try { out.push({ ids: t.ids, files: perfDownloadReport_(t.uuid) }); }
-    catch (e) { logMsg_('ERROR', 'Performance: не скачан отчёт ' + t.uuid + ': ' + e.message); }
-  });
+    if (finalState === 'OK') {
+      try {
+        out.push({ ids: ids, files: perfDownloadReport_(uuid) });
+      } catch (e) {
+        logMsg_('ERROR', 'Performance: не скачан отчёт ' + uuid + ': ' + e.message);
+      }
+    } else if (finalState === 'WAIT') {
+      // Если этот отчёт ещё висит в WAIT у Ozon, следующий заказывать нельзя (будет 429 максимум 1)
+      break;
+    }
+  }
   return out;
 }
 

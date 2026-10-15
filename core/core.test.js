@@ -76,22 +76,22 @@ const be = ue.breakEvenPrice(base.c, base.d, base.land, base.log, base.acq);
 ok(be < pLow, 'цена безубыточности ниже цены с наценкой 20%', 'be=' + be + ' pLow=' + pLow);
 ok(ue.markupFromPrice(be, base.c, base.d, base.land, base.log, base.acq) < 1e-9,
    'наценка по цене безубыточности = 0');
-// (1−c)(1−d) ≤ 0 только при c ≥ 1 или d ≥ 1 — такие доли отсекаем явно
+// (1−c−d) ≤ 0 при c ≥ 1, d ≥ 1 или c + d ≥ 1 — такие доли отсекаем явно
 ok(ue.priceFromMarkup(0.3, 1, base.d, base.land, base.log, base.acq) === null, 'комиссия 100% → null');
 ok(ue.priceFromMarkup(0.3, base.c, 1, base.land, base.log, base.acq) === null, 'ДРР 100% → null');
-// комиссия 90% формально разрешена, но запас цены мизерный — это отдельный флаг
-near(ue.headroom(0.9, 0.15), 0.085, 0.0001, 'запас цены при комиссии 90% и ДРР 15%');
-ok(!ue.isFeasible(0.9, 0.15), 'комиссия 90% + ДРР 15% — экономика нежизнеспособна');
-ok(ue.isFeasible(base.c, base.d), 'комиссия 48,3% + ДРР 15% — жизнеспособна');
+// комиссия 75% + ДРР 15% = 90% удержаний: запас цены 10% (< 20%) — отдельный флаг нежизнеспособности
+near(ue.headroom(0.75, 0.15), 0.10, 0.0001, 'запас цены при комиссии 75% и ДРР 15% (1 - 0.75 - 0.15 = 0.10)');
+ok(!ue.isFeasible(0.75, 0.15), 'комиссия 75% + ДРР 15% — экономика нежизнеспособна');
+ok(ue.isFeasible(base.c, base.d), 'комиссия 48,3% + ДРР 15% — жизнеспособна (headroom 36,7%)');
 const infeasible = ue.unitEconomics(Object.assign({}, {
   costPerUnit: 1343.66, multiplicity: 0.2, packaging: 42.89, transport: 0,
-  commissionRate: 0.9, drrRate: 0.15, logistics: 189.5, acquiring: 10.73,
+  commissionRate: 0.75, drrRate: 0.15, logistics: 189.5, acquiring: 10.73,
   price: 1757, oldPrice: 2355, minPrice: 1615, minMarkup: 0.2, targetMarkup: 0.3
 }));
 ok(infeasible.ok === true, 'нездравая экономика считается, а не падает');
 ok(infeasible.warnings.some(function (w) { return /нерыночной/.test(w); }),
    'и сопровождается понятным предупреждением', JSON.stringify(infeasible.warnings));
-near(ue.headroom(base.c, base.d), 0.43945, 0.0001, 'запас цены на проверенном образце');
+near(ue.headroom(base.c, base.d), 0.367, 0.0001, 'запас цены по честной формуле 1 - c - d (1 - 0.483 - 0.15 = 0.367)');
 ok(ue.markupFromPrice(1757, 1, 0, base.land, base.log, base.acq) === null, 'комиссия 100% → null');
 ok(ue.markupFromPrice(1757, base.c, base.d, 0, base.log, base.acq) === null, 'нулевой ленд-кост → null, а не Infinity');
 
@@ -256,6 +256,140 @@ ok(ep.accrualPostings(new Array(500).fill('n')).body.posting_numbers.length === 
    'начисления: не более 200 номеров отправления за запрос');
 ok(ep.ANALYTICS_METRICS.BASE.concat(ep.ANALYTICS_METRICS.PREMIUM).indexOf('adv_sum_all') < 0,
    'adv_sum_all не используется: такой метрики в схеме Ozon не существует');
+
+console.log('=== 8. Расчёт Э2/Э3: комиссия, выкуп, возвраты, каскад наценки, округление, налоги и акции ===');
+const oakSku = {
+  costPerUnit: 1343.66, multiplicity: 0.2, packaging: 42.89, transport: 0,
+  commissionRate: 0.483, drrRate: 0.15, logistics: 189.5, acquiring: 10.73,
+  price: 1757, oldPrice: 2355, minPrice: 1615,
+  minMarkup: 0.2, targetMarkup: 0.3
+};
+const cFromFact = ue.resolveCommissionRate(16.32, 48, 'FBS');
+const cFromFallback = ue.resolveCommissionRate('', 48, 'FBO');
+ok(Math.abs(cFromFact.rate - 0.1632) < 1e-6 && cFromFact.source === 'Комиссия факт!J' &&
+   Math.abs(cFromFallback.rate - 0.48) < 1e-6 && cFromFallback.source === 'Факт Ozon!W',
+   'Комиссия: приоритет Комиссия факт!J (16.32%), при отсутствии — Факт Ozon!W/X (48%)');
+
+const bValid = ue.resolveBuyoutRate(80, 1);
+const bEmpty = ue.resolveBuyoutRate('', 0.95);
+const bNeg = ue.resolveBuyoutRate(-5, 0.95);
+const bOver = ue.resolveBuyoutRate(104.74, 0.95);
+ok(Math.abs(bValid.rate - 0.8) < 1e-6 && !bValid.warning &&
+   Math.abs(bEmpty.rate - 0.95) < 1e-6 && Boolean(bEmpty.warning) &&
+   Math.abs(bNeg.rate - 0.95) < 1e-6 && Boolean(bNeg.warning) &&
+   Math.abs(bOver.rate - 0.95) < 1e-6 && Boolean(bOver.warning),
+   'Выкуп: 0–100% из Продажи!M; пустое, отрицательное и >100% заменяются на Параметры!B8 с предупреждением');
+
+const zeroBuyoutSku = Object.assign({}, oakSku, { salesBuyout: 0, defaultBuyout: 1, returnTariff: 115 });
+const zeroBuyoutRes = ue.unitEconomics(zeroBuyoutSku);
+ok(zeroBuyoutRes.ok && zeroBuyoutRes.buyoutRate === 0 && zeroBuyoutRes.priceBlocked &&
+   zeroBuyoutRes.price.target === null && zeroBuyoutRes.price.actionFloor === null &&
+   zeroBuyoutRes.warnings.some(function (w) { return w.indexOf('выкуп 0%') >= 0; }),
+   'Выкуп 0%: принимается как валидные 0%, но блокирует цену из-за неограниченного возврата');
+
+const returnSku = Object.assign({}, oakSku, { salesBuyout: 80, defaultBuyout: 1, returnTariff: 115 });
+const returnRes = ue.unitEconomics(returnSku);
+near(returnRes.returnCost, 115 * 0.2 / 0.8, 0.01,
+     'Возвратный тариф: 115 × (1 − 0,8) / 0,8 = 28,75 ₽ на выкупленную единицу');
+
+const mSku = ue.resolveMarkupCascade(0.42, 0.35, 0.30);
+const mCat = ue.resolveMarkupCascade('', 0.35, 0.30);
+const mDef = ue.resolveMarkupCascade('', '', 0.30);
+ok(mSku.rate === 0.42 && mSku.source === 'SKU' &&
+   mCat.rate === 0.35 && mCat.source === 'категория' &&
+   mDef.rate === 0.30 && mDef.source === 'Параметры',
+   'Каскад наценок: SKU → категория (Номенклатура!P) → общая (Параметры!B10/B9)');
+
+ok(ue.roundPriceUp(1377.42, 1) === 1378 && ue.roundPriceUp(1377.42, 10) === 1380 && ue.roundPriceUp(1370.01, 10) === 1380,
+   'Округление цен: вверх (ceil) по шагу Параметры!B11');
+
+const taxSku = Object.assign({}, oakSku, { vatRate: 0.22, profitTaxRate: 0.25, roundStep: 1 });
+const taxRes = ue.unitEconomics(taxSku);
+ok(Math.abs(taxRes.price.target - 1649.42) < 0.05 && taxRes.price.targetRounded === 1650 &&
+   Math.abs(taxRes.taxes.vatAmount - 1757 * 0.22 / 1.22) < 0.01 &&
+   Math.abs(taxRes.taxes.profitTax - Math.max(0, taxRes.taxes.profitBeforeTax) * 0.25) < 0.01,
+   'Налоги и честная формула (1 - c - d): целевая цена до налогов (1649,42 → 1650 ₽), НДС и налог на прибыль показаны отдельно');
+
+const actSku = Object.assign({}, oakSku, {
+  roundStep: 1,
+  actions: [
+    { actionId: 1977747, maxActionPrice: 1060, actionPrice: 1073 },
+    { actionId: 2000001, maxActionPrice: 1600, actionPrice: 1580 }
+  ]
+});
+const actRes = ue.unitEconomics(actSku);
+ok(actRes.actionChecks.length === 2 &&
+   actRes.actionChecks[0].allowed === false &&
+   actRes.actionChecks[1].allowed === true,
+   'Ограничения акций: наш пол (1565 ₽) выше лимита 1060 ₽ блокируется, а при лимите 1600 ₽ проходит');
+
+ok(ue.recommendedOldPrice(1195, 0.40, 1) === 1673 &&
+   ue.recommendedOldPrice(1370, 40, 10) === 1920,
+   'Рекомендованная зачёркнутая цена: +40% от целевой с округлением вверх по шагу B11');
+
+ok(ue.inferProductGroup('Mirka-Gold-150mm-P80-10', 'Круг шлифовальный') === 'Mirka' &&
+   ue.inferProductGroup('Kleiberit-Pur-501-1kg-1', 'Клей ПУР') === 'Kleiberit / Клеи' &&
+   ue.inferProductGroup('Кромка-Дуб-44мм-5м.п.', 'Кромка мебельная') === 'Кромка' &&
+   ue.inferProductGroup('Щит-Дуб-40х600', 'Мебельный щит') === 'Щит и брус',
+   'Товарные группы / бренды: корректная классификация Mirka, Kleiberit, Кромка, Щит и брус');
+
+const volSku = Object.assign({}, oakSku, {
+  offerId: 'Кромка-Дуб-44мм-5м.п.',
+  roundStep: 1,
+  oldPriceMarkup: 0.40,
+  deliveredUnits: 10,
+  salesRevenue: 17570
+});
+const volRes = ue.unitEconomics(volSku);
+ok(volRes.category === 'Кромка' &&
+   volRes.price.recommendedOldPrice === ue.roundPriceUp(1650 * 1.40, 1) &&
+   volRes.price.deltaRub === 1757 - 1650 &&
+   volRes.salesVolume.deliveredUnits === 10 &&
+   Math.abs(volRes.salesVolume.totalProfitBeforeTax - volRes.taxes.profitBeforeTax * 10) < 0.05,
+   'Объём продаж и комплект цен Э3: дельта цены, зачёркнутая цена и суммарная прибыль на объём продаж');
+
+// --- Проверка новых рыночных улучшений (Идеи 2..9) ---
+near(ue.logisticsFbo(75, 254, 25, 0.70), 75 * 0.70 + 254 * 0.30 + 25, 0.001,
+     'География логистики (Идея 2): при 70% продаж в МСК тариф ближе к min (153,70 ₽ вместо 189,50 ₽)');
+ok(ue.isHomeCluster('Москва, МО и Дальние регионы', '', 'МСК') === true &&
+   ue.isHomeCluster('Урал', 'Москва-Запад', 'МСК') === false,
+   'География кластеров: распознавание домашнего кластера МСК vs нелокального кластера');
+
+const drrSkuInfo = ue.resolveItemDrr({ salesDrrPct: 8.5 }, 0.15, 0.50);
+const drrCappedInfo = ue.resolveItemDrr({ salesDrrPct: 85 }, 0.15, 0.50);
+const drrFallbackInfo = ue.resolveItemDrr({}, 0.15, 0.50);
+ok(Math.abs(drrSkuInfo.rate - 0.085) < 1e-6 && drrSkuInfo.source === 'Продажи!G (SKU)' &&
+   Math.abs(drrCappedInfo.rate - 0.50) < 1e-6 && Boolean(drrCappedInfo.warning) &&
+   Math.abs(drrFallbackInfo.rate - 0.15) < 1e-6 && drrFallbackInfo.source === 'Параметры!B4',
+   'Индивидуальный ДРР по SKU (Идея 7): приоритет фактического ДРР SKU с потолком 50% и откатом на B4');
+
+const mpRisk = ue.checkMinPriceProtection(0, 1500);
+const mpLow = ue.checkMinPriceProtection(1400, 1500);
+const mpOk = ue.checkMinPriceProtection(1600, 1500);
+ok(!mpRisk.ok && !mpLow.ok && mpOk.ok,
+   'Защита min_price в Ozon (Идея 5): обнаружение пустого или заниженного min_price');
+
+const abcClasses = ue.classifyAbcByProfit([8000, 1500, 500, -300, 0], [10, 5, 2, 3, 0]);
+ok(abcClasses[0].indexOf('A') === 0 && abcClasses[1].indexOf('B') === 0 &&
+   abcClasses[2].indexOf('C') === 0 && abcClasses[3] === 'УБЫТОК' && abcClasses[4] === 'Нет продаж',
+   'ABC-анализ по прибыли (Идея 6): распределение A (80%) / B (15%) / C (5%) / УБЫТОК / Нет продаж');
+
+near(ue.landCost(1000, 1, 50, 0, 0.02), 1050 * 1.02, 0.001,
+     'Резерв на брак и хранение (Идея 9): корректное увеличение ленд-коста на +2%');
+
+// --- Проверка новой механики «Предельной цены» и «Цены для минимального бустинга» Ozon (сентябрь 2026) ---
+ok(ue.recommendedNoActionPrice(1640, 0.10, 10) === 1810 &&
+   ue.recommendedNoActionPrice(1640, 0, 10) === 1640,
+   'Реком. Предельная цена без акций: +10% от целевой Предельной с округлением вверх по шагу B11');
+
+const boostScenario1 = ue.evaluateActionBoosting(1560, 1640, 1800);
+const boostScenario2 = ue.evaluateActionBoosting(1560, 1640, 1600);
+const boostScenario3 = ue.evaluateActionBoosting(1560, 1640, 1060);
+ok(boostScenario1.scenario === 'IN_ACTION_TARGET' && boostScenario1.exitActionRequired === false &&
+   boostScenario2.scenario === 'CHOICE_BOOST_OR_MARGIN' && boostScenario2.recommendedLimitPrice === 1600 &&
+   boostScenario3.scenario === 'EXIT_ACTION' && boostScenario3.exitActionRequired === true &&
+   boostScenario3.recommendation.indexOf('ВЫЙТИ ИЗ АКЦИИ') !== -1,
+   'Оценка бустинга Ozon: 3 сценария (🟢 В АКЦИИ / 🟡 ВЫБОР / 🔴 ВЫЙТИ ИЗ АКЦИИ через Предельную > лимита)');
 
 // ============================================ ИТОГ
 console.log('\n' + '='.repeat(58));

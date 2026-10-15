@@ -312,7 +312,7 @@ function fboPostingsWithFinance_(sinceIso, toIso, statuses) {
       filter: { since: sinceIso, to: toIso },
       limit: 100,                               // максимум по схеме — 100
       sort_dir: 'DESC',
-      with: { analytics_data: false, financial_data: true, legal_info: false }
+      with: { analytics_data: true, financial_data: true, legal_info: false }
     };
     if (statuses && statuses.length) body.filter.statuses = statuses;
     if (cursor) body.cursor = cursor;
@@ -341,7 +341,7 @@ function fbsPostingsWithFinance_(sinceIso, toIso) {
       filter: { since: sinceIso, to: toIso },
       limit: 100,
       offset: offset,
-      with: { analytics_data: false, barcodes: false, financial_data: true,
+      with: { analytics_data: true, barcodes: false, financial_data: true,
               legal_info: false, translit: false }
     });
     const res = data.result || {};
