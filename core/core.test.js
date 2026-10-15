@@ -356,12 +356,14 @@ ok(ue.isHomeCluster('Москва, МО и Дальние регионы', '', '
    'География кластеров: распознавание домашнего кластера МСК vs нелокального кластера');
 
 const drrSkuInfo = ue.resolveItemDrr({ salesDrrPct: 8.5 }, 0.15, 0.50);
+const drrUnder1PctInfo = ue.resolveItemDrr({ salesDrrPct: 0.76, salesAdSpend: 272.63, salesRevenue: 35686 }, 0.15, 0.50);
 const drrCappedInfo = ue.resolveItemDrr({ salesDrrPct: 85 }, 0.15, 0.50);
 const drrFallbackInfo = ue.resolveItemDrr({}, 0.15, 0.50);
 ok(Math.abs(drrSkuInfo.rate - 0.085) < 1e-6 && drrSkuInfo.source === 'Продажи!G (SKU)' &&
+   Math.abs(drrUnder1PctInfo.rate - (272.63 / 35686)) < 1e-6 && drrUnder1PctInfo.percent === 0.76 && !drrUnder1PctInfo.warning &&
    Math.abs(drrCappedInfo.rate - 0.50) < 1e-6 && Boolean(drrCappedInfo.warning) &&
    Math.abs(drrFallbackInfo.rate - 0.15) < 1e-6 && drrFallbackInfo.source === 'Параметры!B4',
-   'Индивидуальный ДРР по SKU (Идея 7): приоритет фактического ДРР SKU с потолком 50% и откатом на B4');
+   'Индивидуальный ДРР по SKU (Идея 7): приоритет фактического ДРР SKU (включая < 1%, напр. 0,76%) с потолком 50% и откатом на B4');
 
 const mpRisk = ue.checkMinPriceProtection(0, 1500);
 const mpLow = ue.checkMinPriceProtection(1400, 1500);

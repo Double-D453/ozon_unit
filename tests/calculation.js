@@ -383,4 +383,10 @@ near(rowsAfter1c[0][5], 901.13, 0.01, 'Расчёт!F (Кромка-Дуб): н�
 near(rowsAfter1c[5][5], 120.00, 0.01, 'Расчёт!F (Mirka): новая СС 120.00 ₽ подтянулась из «Себестоимость 1С МСК»');
 near(rowsAfter1c[5][8], 625.00, 0.01, 'Расчёт!I (Mirka): новый ленд-кост = 120 * 5 + 25 = 625 ₽');
 
+// Регрессия ДРР < 1% (например, 0,76% = 272.63 ₽ / 35686 ₽): не должен превращаться в 76% -> 50%
+salesSh.getRange(3, 4, 1, 4).setValues([[35686, 8, 272.63, 0.76]]);
+calculateUnitEconomics();
+const rowsDrrSub1 = calcSh.getRange(CFG.CALC_DATA_START_ROW, 1, 6, CFG.CALC_COLS).getValues();
+near(rowsDrrSub1[1][18], 0.76, 0.01, 'Расчёт!S (Kleiberit при ДРР 0,76%): ДРР < 1% должен оставаться 0,76%, а не 50%');
+
 console.log('РАСЧЁТ Э2/Э3 И UX/UI (calculation.js): ВСЕ ПРОВЕРКИ ПРОШЛИ ✓');

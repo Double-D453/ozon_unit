@@ -810,22 +810,31 @@ function resolveItemDrr_(sRow, dRow, defaultDrr, maxSkuDrrCap) {
   let source = 'Параметры!B4';
 
   if (sRow) {
-    const sDrrPct = calcNum_(sRow[6]); // колонка G «ДРР от всей выручки, %»
+    const sDrrPct = calcNum_(sRow[6]); // колонка G «ДРР от всей выручки, %» (в процентах: 0.76 = 0,76%, 8.0 = 8,0%)
     const sAdvSpend = calcNum_(sRow[5]); // колонка F «Расход на рекламу, ₽»
     const sRev = calcNum_(sRow[3]); // колонка D «Выручка, ₽»
-    if (sDrrPct !== null && sDrrPct > 0) {
-      rawRate = sDrrPct > 1 ? sDrrPct / 100 : sDrrPct;
-      source = 'Продажи!G (SKU)';
-    } else if (sAdvSpend !== null && sAdvSpend > 0 && sRev !== null && sRev > 0) {
+    if (sAdvSpend !== null && sAdvSpend > 0 && sRev !== null && sRev > 0) {
       rawRate = sAdvSpend / sRev;
-      source = 'Продажи!F/D (SKU)';
+      source = (sDrrPct !== null && sDrrPct > 0) ? 'Продажи!G (SKU)' : 'Продажи!F/D (SKU)';
+    } else if (sDrrPct !== null && sDrrPct > 0) {
+      rawRate = sDrrPct / 100;
+      source = 'Продажи!G (SKU)';
     }
   }
 
   if (rawRate === null && dRow) {
-    const dPct = calcNum_(dRow[7]); // колонка H «ДРР от всей выручки SKU, %»
-    if (dPct !== null && dPct > 0) {
-      rawRate = dPct > 1 ? dPct / 100 : dPct;
+    const dSpend = calcNum_(dRow[3]); // колонка D «Расход, ₽»
+    const dRevAn = calcNum_(dRow[6]); // колонка G «Выручка SKU (аналитика), ₽»
+    const dRevRep = calcNum_(dRow[5]); // колонка F «Выручка SKU (из отчёта), ₽»
+    const dRevAdv = calcNum_(dRow[4]); // колонка E «Продажи в продвижении, ₽»
+    const dDenom = (dRevAn !== null && dRevAn > 0) ? dRevAn
+      : ((dRevRep !== null && dRevRep > 0) ? dRevRep : ((dRevAdv !== null && dRevAdv > 0) ? dRevAdv : null));
+    const dPct = calcNum_(dRow[7]); // колонка H «ДРР от всей выручки SKU, %» (в процентах: 0.76 = 0,76%)
+    if (dSpend !== null && dSpend > 0 && dDenom !== null && dDenom > 0) {
+      rawRate = dSpend / dDenom;
+      source = 'Реклама ДРР!H (SKU)';
+    } else if (dPct !== null && dPct > 0) {
+      rawRate = dPct / 100;
       source = 'Реклама ДРР!H (SKU)';
     }
   }
@@ -863,15 +872,23 @@ function resolveItemDrr_(sRow, dRow, defaultDrr, maxSkuDrrCap) {
  */
 function resolveItemLocalShare_(sRow, storeGeoShareFraction, defaultLocalShare) {
   if (sRow && sRow.length >= 20) {
+    const mskOrders = calcNum_(sRow[17]); // R (18-я кол., индекс 17) «Заказов в МСК, шт»
     const geoOrders = calcNum_(sRow[18]); // S (19-я кол., индекс 18) «Заказов с гео, шт»
-    const geoPct = calcNum_(sRow[19]);    // T (20-я кол., индекс 19) «Доля кластера МСК, %»
-    if (geoOrders !== null && geoOrders > 0 && geoPct !== null && geoPct >= 0 && geoPct <= 100) {
-      const f = geoPct > 1 ? geoPct / 100 : geoPct;
-      return {
-        share: f,
-        percent: Math.round(f * 10000) / 100,
-        source: 'Продажи!T (SKU)'
-      };
+    const geoPct = calcNum_(sRow[19]);    // T (20-я кол., индекс 19) «Доля кластера МСК, %» (0..100)
+    if (geoOrders !== null && geoOrders > 0) {
+      let f = null;
+      if (mskOrders !== null && mskOrders >= 0 && mskOrders <= geoOrders) {
+        f = mskOrders / geoOrders;
+      } else if (geoPct !== null && geoPct >= 0 && geoPct <= 100) {
+        f = geoPct / 100;
+      }
+      if (f !== null) {
+        return {
+          share: f,
+          percent: Math.round(f * 10000) / 100,
+          source: 'Продажи!T (SKU)'
+        };
+      }
     }
   }
   if (storeGeoShareFraction !== null && storeGeoShareFraction !== undefined &&
@@ -1159,9 +1176,6 @@ function calculateUnitEconomics() {
 
     // --- 6. Автосинхронизация СС и кратности из листов 1С, товарных групп «Номенклатура!P» и чтение строк ---
     const sync1cStats = sync1cCostsToNomenclature_(ss);
-    if ((sync1cStats.filledCost > 0 || sync1cStats.filledMult > 0) && typeof copyLandCostFormula_ === 'function') {
-      try { copyLandCostFormula_(nom); } catch (eLc) {}
-    }
     const filledGroups = fillEmptyNomProductGroups_(nom);
     const nomCols = Math.max(nom.getMaxColumns(), CFG.NOM_COLS);
     const nomRows = nom.getRange(2, 1, nom.getLastRow() - 1, nomCols).getValues();

@@ -241,19 +241,19 @@ function resolveItemDrr(options, defaultDrr, maxDrrCap) {
   let rawFrac = null;
   let source = '';
 
-  const salesPct = toFractionRate(opts.salesDrrPct);
+  const salesPctNum = num(opts.salesDrrPct);
   const salesSpend = num(opts.salesAdSpend);
   const salesRev = num(opts.salesRevenue);
-  const drrSheetPct = toFractionRate(opts.drrSheetPct);
+  const drrSheetPctNum = num(opts.drrSheetPct);
 
-  if (salesPct !== null && salesPct >= 0) {
-    rawFrac = salesPct;
-    source = 'Продажи!G (SKU)';
-  } else if (salesSpend !== null && salesSpend >= 0 && salesRev !== null && salesRev > 0) {
+  if (salesSpend !== null && salesSpend > 0 && salesRev !== null && salesRev > 0) {
     rawFrac = salesSpend / salesRev;
-    source = 'Продажи!F/D (SKU)';
-  } else if (drrSheetPct !== null && drrSheetPct >= 0) {
-    rawFrac = drrSheetPct;
+    source = (salesPctNum !== null && salesPctNum >= 0) ? 'Продажи!G (SKU)' : 'Продажи!F/D (SKU)';
+  } else if (salesPctNum !== null && salesPctNum >= 0) {
+    rawFrac = salesPctNum / 100;
+    source = 'Продажи!G (SKU)';
+  } else if (drrSheetPctNum !== null && drrSheetPctNum >= 0) {
+    rawFrac = drrSheetPctNum / 100;
     source = 'Реклама ДРР!H (SKU)';
   }
 
