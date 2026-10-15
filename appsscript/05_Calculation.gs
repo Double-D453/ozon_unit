@@ -188,6 +188,224 @@ function inferProductGroup_(offerId, name) {
 }
 
 /**
+ * Синхронизирует себестоимость из листа «Себестоимость 1С МСК» (по Коду 1С / Номенклатуре 1С)
+ * и кратность/упаковку из листа «Кратность и упаковка» (по Offer id) в лист «Номенклатура» (колонки E..H).
+ * Правила безопасности:
+ *  - Ячейки с формулами (=...) не перезаписываются;
+ *  - Если товара нет в «Себестоимость 1С МСК» или там пусто/0, текущая СС в «Номенклатуре!F» сохраняется;
+ *  - Коды 1С сопоставляются точно, без ведущих нулей ('00000001612' ↔ '1612'), по точному названию 1С,
+ *    а также без буквенного префикса ('В0000013466' ↔ '13466'), если такой номер однозначен.
+ */
+function sync1cCostsToNomenclature_(ss) {
+  const result = {
+    updatedCost: 0,
+    filledCost: 0,
+    filledMult: 0,
+    updatedMult: 0,
+    filledPack: 0,
+    updatedPack: 0,
+    filledName1c: 0
+  };
+  if (!ss) return result;
+  const nom = ss.getSheetByName(CFG.SHEETS.NOM);
+  if (!nom || nom.getLastRow() < 2) return result;
+
+  try {
+    const normCodeExact = function (c) {
+      return String(c === undefined || c === null ? '' : c)
+        .trim()
+        .replace(/\.0+$/, '')
+        .toUpperCase();
+    };
+    const normCodeNoLeadingZeros = function (c) {
+      return normCodeExact(c).replace(/^0+(?=\d)/, '');
+    };
+    const normCodeStripped = function (c) {
+      return normCodeExact(c)
+        .replace(/^[А-ЯЁA-Z]+0*(?=\d)/, '')
+        .replace(/^0+(?=\d)/, '');
+    };
+    const normName = function (s) {
+      return String(s === undefined || s === null ? '' : s)
+        .trim()
+        .toLowerCase()
+        .replace(/\u00A0/g, ' ')
+        .replace(/\s+/g, ' ');
+    };
+
+    // 1. Читаем «Себестоимость 1С МСК» (A: Код 1С, B: Номенклатура 1С, C: Остаток, D: Сбс за ед., ₽)
+    const byCodeExact = {};
+    const byCodeNoZero = {};
+    const byCodeStripped = {};
+    const byName1c = {};
+    const sbsSh = ss.getSheetByName('Себестоимость 1С МСК');
+    if (sbsSh && sbsSh.getLastRow() >= 2) {
+      const sCols = Math.min(Math.max(sbsSh.getMaxColumns(), 4), 10);
+      const sRows = sbsSh.getRange(2, 1, sbsSh.getLastRow() - 1, sCols).getValues();
+      sRows.forEach(function (r) {
+        const costRaw = calcNum_(r[3]);
+        if (costRaw === null || costRaw <= 0) return;
+        const cost = Math.round(costRaw * 100) / 100;
+        const rawCode = r[0];
+        const rawName = String(r[1] === undefined || r[1] === null ? '' : r[1]).trim();
+        const entry = { cost: cost, name1c: rawName, code1c: normCodeExact(rawCode) };
+
+        const cExact = normCodeExact(rawCode);
+        const cNoZero = normCodeNoLeadingZeros(rawCode);
+        const cStrip = normCodeStripped(rawCode);
+        const nKey = normName(rawName);
+
+        if (cExact) byCodeExact[cExact] = entry;
+        if (cNoZero) byCodeNoZero[cNoZero] = entry;
+        if (nKey) byName1c[nKey] = entry;
+        if (cStrip) {
+          if (byCodeStripped[cStrip] && Math.abs(byCodeStripped[cStrip].cost - cost) > 0.005) {
+            byCodeStripped[cStrip] = { ambiguous: true };
+          } else if (!byCodeStripped[cStrip]) {
+            byCodeStripped[cStrip] = entry;
+          }
+        }
+      });
+    }
+
+    // 2. Читаем «Кратность и упаковка» (A: Offer id, B: Продаем (кратность), C: Упаковка, ₽)
+    const kuByOffer = {};
+    const kuSh = ss.getSheetByName('Кратность и упаковка');
+    if (kuSh && kuSh.getLastRow() >= 2) {
+      const kCols = Math.min(Math.max(kuSh.getMaxColumns(), 3), 6);
+      const kRows = kuSh.getRange(2, 1, kuSh.getLastRow() - 1, kCols).getValues();
+      kRows.forEach(function (r) {
+        const oid = String(r[0] === undefined || r[0] === null ? '' : r[0]).trim();
+        if (!oid) return;
+        const mult = calcNum_(r[1]);
+        const pack = calcNum_(r[2]);
+        kuByOffer[oid] = {
+          mult: mult !== null && mult > 0 ? Math.round(mult * 1e6) / 1e6 : null,
+          pack: pack !== null && pack >= 0 ? Math.round(pack * 100) / 100 : null
+        };
+      });
+    }
+
+    const hasSbs = Object.keys(byCodeExact).length > 0 || Object.keys(byName1c).length > 0;
+    const hasKu = Object.keys(kuByOffer).length > 0;
+    if (!hasSbs && !hasKu) return result;
+
+    // 3. Обновляем «Номенклатуру» (колонки E=5, F=6, G=7, H=8)
+    const nRows = nom.getLastRow() - 1;
+    const nomVals = nom.getRange(2, 1, nRows, 8).getValues();
+    const efghFormulas = nom.getRange(2, 5, nRows, 4).getFormulas();
+    let changed = false;
+
+    const newEfgh = nomVals.map(function (r, idx) {
+      const oid = String(r[0] === undefined || r[0] === null ? '' : r[0]).trim();
+      const code1c = r[3];
+      let curName1c = r[4];
+      let curCost = r[5];
+      let curMult = r[6];
+      let curPack = r[7];
+      const fRow = efghFormulas[idx] || ['', '', '', ''];
+
+      // Сопоставление себестоимости из «Себестоимость 1С МСК»
+      if (hasSbs) {
+        const cExact = normCodeExact(code1c);
+        const cNoZero = normCodeNoLeadingZeros(code1c);
+        const cStrip = normCodeStripped(code1c);
+        const nKey = normName(curName1c);
+
+        let match = null;
+        if (cExact && byCodeExact[cExact]) {
+          match = byCodeExact[cExact];
+        } else if (cNoZero && byCodeNoZero[cNoZero]) {
+          match = byCodeNoZero[cNoZero];
+        } else if (nKey && byName1c[nKey]) {
+          match = byName1c[nKey];
+        } else if (cStrip && byCodeStripped[cStrip] && !byCodeStripped[cStrip].ambiguous) {
+          match = byCodeStripped[cStrip];
+        }
+
+        if (match && match.cost > 0) {
+          if (!String(fRow[1] || '').trim()) {
+            const oldNum = calcNum_(curCost);
+            if (oldNum === null || oldNum <= 0) {
+              curCost = match.cost;
+              result.filledCost++;
+              changed = true;
+            } else if (Math.abs(oldNum - match.cost) > 0.005) {
+              curCost = match.cost;
+              result.updatedCost++;
+              changed = true;
+            }
+          }
+          if (!String(fRow[0] || '').trim() &&
+              (curName1c === '' || curName1c === null || curName1c === undefined) &&
+              match.name1c) {
+            curName1c = match.name1c;
+            result.filledName1c++;
+            changed = true;
+          }
+        }
+      }
+
+      // Сопоставление кратности и упаковки из «Кратность и упаковка»
+      if (hasKu && oid && kuByOffer[oid]) {
+        const ku = kuByOffer[oid];
+        if (ku.mult !== null && ku.mult > 0 && !String(fRow[2] || '').trim()) {
+          const oldMult = calcNum_(curMult);
+          if (oldMult === null || oldMult <= 0) {
+            curMult = ku.mult;
+            result.filledMult++;
+            changed = true;
+          } else if (Math.abs(oldMult - ku.mult) > 1e-6) {
+            curMult = ku.mult;
+            result.updatedMult++;
+            changed = true;
+          }
+        }
+        if (ku.pack !== null && ku.pack >= 0 && !String(fRow[3] || '').trim()) {
+          const oldPack = calcNum_(curPack);
+          if (oldPack === null || curPack === '' || curPack === null || curPack === undefined) {
+            curPack = ku.pack;
+            result.filledPack++;
+            changed = true;
+          } else if (Math.abs(oldPack - ku.pack) > 0.005) {
+            curPack = ku.pack;
+            result.updatedPack++;
+            changed = true;
+          }
+        }
+      }
+
+      return [
+        String(fRow[0] || '').trim() ? fRow[0] : curName1c,
+        String(fRow[1] || '').trim() ? fRow[1] : curCost,
+        String(fRow[2] || '').trim() ? fRow[2] : curMult,
+        String(fRow[3] || '').trim() ? fRow[3] : curPack
+      ];
+    });
+
+    if (changed) {
+      nom.getRange(2, 5, nRows, 4).setValues(newEfgh);
+      logMsg_('INFO', '1С → Номенклатура: обновлена СС у ' + result.updatedCost +
+        ' SKU, заполнена новая СС у ' + result.filledCost +
+        ' SKU, кратность (новых ' + result.filledMult + ', изм. ' + result.updatedMult +
+        '), упаковка (новых ' + result.filledPack + ', изм. ' + result.updatedPack + ').');
+    }
+  } catch (e) {
+    logMsg_('WARN', 'sync1cCostsToNomenclature_: ' + e.message);
+  }
+  return result;
+}
+
+/** Публичная функция для ручного обновления СС и кратности из листов 1С с пересчётом юнит-экономики. */
+function sync1cToNomenclature() {
+  const ss = ss_();
+  const syncRes = sync1cCostsToNomenclature_(ss);
+  const calcRes = calculateUnitEconomics();
+  calcRes.sync1c = syncRes;
+  return calcRes;
+}
+
+/**
  * Дозаполняет только ПУСТЫЕ ячейки колонки P («Категория») в «Номенклатуре»
  * понятными товарными группами/брендами. Существующие значения не перезаписывает.
  */
@@ -939,7 +1157,11 @@ function calculateUnitEconomics() {
       actByOffer[oid].push({ rowIndex: idx, row: r });
     });
 
-    // --- 6. Автозаполнение пустых ячеек «Номенклатура!P» товарными группами и чтение строк ---
+    // --- 6. Автосинхронизация СС и кратности из листов 1С, товарных групп «Номенклатура!P» и чтение строк ---
+    const sync1cStats = sync1cCostsToNomenclature_(ss);
+    if ((sync1cStats.filledCost > 0 || sync1cStats.filledMult > 0) && typeof copyLandCostFormula_ === 'function') {
+      try { copyLandCostFormula_(nom); } catch (eLc) {}
+    }
     const filledGroups = fillEmptyNomProductGroups_(nom);
     const nomCols = Math.max(nom.getMaxColumns(), CFG.NOM_COLS);
     const nomRows = nom.getRange(2, 1, nom.getLastRow() - 1, nomCols).getValues();
@@ -1467,6 +1689,7 @@ function calculateUnitEconomics() {
       actionsBelowFloor: actBelowFloor,
       actionsBlocked: actBlocked,
       filledProductGroups: filledGroups,
+      sync1c: sync1cStats,
       productGroupsCount: Object.keys(groupCounts).length,
       skusWithSales: skusWithSales,
       totalDeliveredUnits: totalDeliveredUnits,

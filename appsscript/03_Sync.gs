@@ -1869,6 +1869,7 @@ function onOpen() {
     .addItem('Синхронизировать продажи (аналитика)', 'menuSyncSales')
     .addItem('Синхронизировать рекламу (ДРР)', 'menuSyncDrr')
     .addItem('Синхронизировать акции', 'menuSyncActions')
+    .addItem('Обновить СС и кратность из листов 1С', 'menuSync1c')
     .addItem('Рассчитать юнит-экономику (Э2/Э3)', 'menuCalculate')
     .addItem('Навести порядок и обновить дизайн таблицы', 'menuApplyUx')
     .addSeparator()
@@ -1888,11 +1889,18 @@ function onOpen() {
 
 function formatCalcAlert_(res) {
   if (!res || typeof res !== 'object') return 'Готово.';
+  const s1c = res.sync1c || {};
+  const s1cLine = (s1c.updatedCost || s1c.filledCost || s1c.filledMult || s1c.updatedMult)
+    ? '• Из листов 1С → Номенклатура: СС обновлена у ' + (s1c.updatedCost || 0) +
+      ' SKU, новая СС у ' + (s1c.filledCost || 0) +
+      ' SKU, кратность дозаполнена у ' + ((s1c.filledMult || 0) + (s1c.updatedMult || 0)) + ' SKU'
+    : '• Из листов 1С → Номенклатура: все значения СС и кратности уже актуальны';
   return [
     'Расчёт юнит-экономики (Э2/Э3) завершён (' + (res.updatedAt || '') + '):',
     '',
     '• Всего артикулов в базе: ' + (res.total || 0) +
       ' (товарных групп: ' + (res.productGroupsCount || 0) + ')',
+    s1cLine,
     '• Рассчитано цен: ' + (res.calculated || 0) +
       ' (пропущено без СС/кратности: ' + (res.skippedNoCost || 0) +
       ', блок при выкупе 0%: ' + (res.blockedZeroBuyout || 0) + ')',
@@ -1909,7 +1917,7 @@ function formatCalcAlert_(res) {
       (res.actionsBelowFloor ? ' (из них текущая Предельная ниже нашего пола: ' + res.actionsBelowFloor + ')' : ''),
     '  — ВЫЙТИ ИЗ АКЦИИ (наш пол > Цены для мин. бустинга): ' + (res.actionsBlocked || 0),
     '',
-    'Листы «Расчёт» (56 кол. A..BD, KPI-шапка, группы [+], светофор), «Акции» и «Проект» обновлены.'
+    'Листы «Номенклатура», «Расчёт» (56 кол. A..BD, KPI-шапка, группы [+], светофор), «Акции» и «Проект» обновлены.'
   ].join('\n');
 }
 
@@ -1917,6 +1925,15 @@ function menuSyncFact()    { ui_('Синхронизация данных', sync
 function menuSyncSales()   { ui_('Продажи по SKU', syncSales14); }
 function menuSyncActions() { ui_('Синхронизация акций', syncActions); }
 function menuSyncDrr()     { ui_('Синхронизация рекламы', syncDrr14); }
+function menuSync1c() {
+  const ui = SpreadsheetApp.getUi();
+  try {
+    const res = sync1cToNomenclature();
+    ui.alert('Обновление СС и кратности из 1С + пересчёт Э2/Э3', formatCalcAlert_(res), ui.ButtonSet.OK);
+  } catch (e) {
+    ui.alert('Обновление СС и кратности из 1С', 'Ошибка: ' + e.message + '\n\nПодробности — меню «Показать лог».', ui.ButtonSet.OK);
+  }
+}
 function menuCalculate() {
   const ui = SpreadsheetApp.getUi();
   try {

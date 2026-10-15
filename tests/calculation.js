@@ -359,4 +359,28 @@ assert(orderedNames[0] === 'Расчёт' && orderedNames[1] === 'Акции' &&
 assert(calcSh.getTabColor() === '#1e8e3e', 'Ярлычок «Расчёт» должен быть зелёным (#1e8e3e)');
 assert(par.getTabColor() === '#1a73e8', 'Ярлычок «Параметры» должен быть синим (#1a73e8)');
 
+// Проверяем автосинхронизацию «Себестоимость 1С МСК» + «Кратность и упаковка» → «Номенклатура» → «Расчёт»
+const sbsSh = SpreadsheetApp._get('Себестоимость 1С МСК');
+sbsSh.getRange(1, 1, 3, 4).setValues([
+  ['Код 1С', 'Номенклатура 1С', 'Остаток', 'Сбс за ед., ₽'],
+  ['1', 'Дуб', 100, '901,13'],        // '1' должно сопоставиться с '001' (без ведущих нулей) у Кромка-Дуб
+  ['006', 'Мирка', 50, '120,00']      // '006' заполнит пустую СС у Mirka-Без-СС
+]);
+const kuSh = SpreadsheetApp._get('Кратность и упаковка');
+kuSh.getRange(1, 1, 2, 3).setValues([
+  ['Offer id', 'Продаем (кратность)', 'Упаковка, ₽'],
+  ['Mirka-Без-СС', 5, 25]
+]);
+const resAfter1c = calculateUnitEconomics();
+assert(resAfter1c.sync1c.updatedCost === 1 && resAfter1c.sync1c.filledCost === 1,
+  '1С → Номенклатура: 1 СС обновлена (001 ↔ 1) и 1 новая СС заполнена (006)');
+assert(resAfter1c.sync1c.updatedMult === 1 && resAfter1c.sync1c.updatedPack === 1,
+  'Кратность и упаковка → Номенклатура: кратность и упаковка обновлены по Offer id');
+assert(resAfter1c.calculated === 5 && resAfter1c.skippedNoCost === 0,
+  'После загрузки СС из «Себестоимость 1С МСК» товар Mirka-Без-СС перестал пропускаться и вошёл в расчёт');
+const rowsAfter1c = calcSh.getRange(CFG.CALC_DATA_START_ROW, 1, 6, CFG.CALC_COLS).getValues();
+near(rowsAfter1c[0][5], 901.13, 0.01, 'Расчёт!F (Кромка-Дуб): новая СС 901.13 ₽ подтянулась из «Себестоимость 1С МСК»');
+near(rowsAfter1c[5][5], 120.00, 0.01, 'Расчёт!F (Mirka): новая СС 120.00 ₽ подтянулась из «Себестоимость 1С МСК»');
+near(rowsAfter1c[5][8], 625.00, 0.01, 'Расчёт!I (Mirka): новый ленд-кост = 120 * 5 + 25 = 625 ₽');
+
 console.log('РАСЧЁТ Э2/Э3 И UX/UI (calculation.js): ВСЕ ПРОВЕРКИ ПРОШЛИ ✓');
