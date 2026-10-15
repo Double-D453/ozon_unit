@@ -377,6 +377,20 @@ ok(abcClasses[0].indexOf('A') === 0 && abcClasses[1].indexOf('B') === 0 &&
 near(ue.landCost(1000, 1, 50, 0, 0.02), 1050 * 1.02, 0.001,
      'Резерв на брак и хранение (Идея 9): корректное увеличение ленд-коста на +2%');
 
+// --- Проверка новой механики «Предельной цены» и «Цены для минимального бустинга» Ozon (сентябрь 2026) ---
+ok(ue.recommendedNoActionPrice(1640, 0.10, 10) === 1810 &&
+   ue.recommendedNoActionPrice(1640, 0, 10) === 1640,
+   'Реком. Предельная цена без акций: +10% от целевой Предельной с округлением вверх по шагу B11');
+
+const boostScenario1 = ue.evaluateActionBoosting(1560, 1640, 1800);
+const boostScenario2 = ue.evaluateActionBoosting(1560, 1640, 1600);
+const boostScenario3 = ue.evaluateActionBoosting(1560, 1640, 1060);
+ok(boostScenario1.scenario === 'IN_ACTION_TARGET' && boostScenario1.exitActionRequired === false &&
+   boostScenario2.scenario === 'CHOICE_BOOST_OR_MARGIN' && boostScenario2.recommendedLimitPrice === 1600 &&
+   boostScenario3.scenario === 'EXIT_ACTION' && boostScenario3.exitActionRequired === true &&
+   boostScenario3.recommendation.indexOf('ВЫЙТИ ИЗ АКЦИИ') !== -1,
+   'Оценка бустинга Ozon: 3 сценария (🟢 В АКЦИИ / 🟡 ВЫБОР / 🔴 ВЫЙТИ ИЗ АКЦИИ через Предельную > лимита)');
+
 // ============================================ ИТОГ
 console.log('\n' + '='.repeat(58));
 console.log('ПРОШЛО: ' + pass + '   ПРОВАЛЕНО: ' + fails.length);

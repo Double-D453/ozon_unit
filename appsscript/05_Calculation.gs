@@ -57,39 +57,42 @@ function calcHeaders_() {
     'Источник комиссии',               // 18 R
     'ДРР, %',                          // 19 S
     'Запас цены (headroom), %',        // 20 T
-    'Цена с акцией, ₽',                // 21 U
-    'Цена без акции, ₽',               // 22 V
-    'Зачёркнутая цена, ₽',             // 23 W
-    'min_price Ozon, ₽',               // 24 X
-    'Наценка по цене с акцией, %',     // 25 Y
-    'Наценка по цене без акции, %',    // 26 Z
+    'Предельная цена (сейчас), ₽',     // 21 U (единая цена в «Ценах» и «Акциях от Ozon», marketing_seller_price)
+    'Предельная цена без акций, ₽',    // 22 V (цена до скидки по акциям, price)
+    'Зачёркнутая цена, ₽',             // 23 W (old_price)
+    'Ограничение для акций в Ozon, ₽', // 24 X (min_price, автоотключается в Ozon через 30 дней)
+    'Наценка по Предельной цене, %',   // 25 Y (ROI к ленд-косту по текущей Предельной цене)
+    'Наценка по Предельной без акций, %', // 26 Z
     'Наценка по зачёркнутой цене, %',  // 27 AA
-    'Наценка по min_price, %',         // 28 AB
+    'Наценка по ограничению Ozon, %',  // 28 AB
     'Мин. наценка, %',                 // 29 AC
     'Целевая наценка, %',              // 30 AD
     'Источник наценки',                // 31 AE
     'Безубыточность, ₽',               // 32 AF (округлённая вверх по B11)
-    'Ограничение для акций (наш пол), ₽', // 33 AG (округлённая вверх по B11)
-    'Целевая цена (до окр.), ₽',       // 34 AH
-    'Целевая цена, ₽',                 // 35 AI (округлённая вверх по B11)
+    'Мин. Предельная цена (наш пол), ₽', // 33 AG (округлённая вверх по B11)
+    'Целевая Предельная цена (до окр.), ₽', // 34 AH
+    'Целевая Предельная цена, ₽',      // 35 AI (округлённая вверх по B11)
     'Прибыль до налогов, ₽',           // 36 AJ
     'НДС в цене, ₽',                   // 37 AK
     'Налог на прибыль, ₽',             // 38 AL
     'Статус акций',                    // 39 AM
     'Статус / Предупреждения',         // 40 AN
     'Реком. зачёркнутая цена, ₽',      // 41 AO (ОкрВверх(Целевая × (1 + B15), B11))
-    'Отклонение от целевой, ₽',        // 42 AP (Цена с акцией − Целевая цена)
-    'Отклонение от целевой, %',        // 43 AQ ((Цена с акцией − Целевая) / Целевая)
+    'Отклонение от целевой, ₽',        // 42 AP (Предельная сейчас − Целевая Предельная)
+    'Отклонение от целевой, %',        // 43 AQ ((Предельная сейчас − Целевая) / Целевая)
     'Выкуплено за период, шт',         // 44 AR (из «Продажи» J/E)
     'Выручка за период, ₽',            // 45 AS (из «Продажи» D)
     'Прибыль на объём продаж, ₽',      // 46 AT (Прибыль до налогов × Выкуплено шт)
-    'Маржинальность цены (ROS), %',    // 47 AU (Прибыль до налогов / Цена с акцией)
+    'Маржинальность цены (ROS), %',    // 47 AU (Прибыль до налогов / Предельная цена)
     'Источник ДРР',                    // 48 AV (Продажи!G / Реклама ДРР!H / Параметры!B4)
     'Доля кластера МСК (гео), %',      // 49 AW (из «Продажи» T / P9 / Параметры!B16)
-    'Целевая цена на FBO, ₽',          // 50 AX (целевая цена при работе по FBO)
+    'Целевая цена на FBO, ₽',          // 50 AX (целевая Предельная цена при работе по FBO)
     'Выгода FBO к FBS, ₽/шт',          // 51 AY (Целевая FBS − Целевая FBO, ₽/шт)
     'Остаток всего (FBO+FBS), шт',     // 52 AZ (суммарный остаток FBO + FBS)
-    'ABC по прибыли'                   // 53 BA (A 80% / B 15% / C 5% / УБЫТОК / Нет продаж)
+    'ABC по прибыли',                  // 53 BA (A 80% / B 15% / C 5% / УБЫТОК / Нет продаж)
+    'Цена для мин. бустинга (акция Ozon), ₽', // 54 BB (max_action_price из «Акции!G»)
+    'Решение по акции / бустингу (Предельная цена)', // 55 BC (В акции / Выбор / Выйти из акции: Предельная > BB)
+    'Реком. Предельная цена без акций, ₽' // 56 BD (ОкрВверх(Целевая × (1 + B18), B11))
   ];
 }
 
@@ -222,9 +225,9 @@ function fillEmptyNomProductGroups_(nom) {
 }
 
 /**
- * Чтение общих параметров расчёта с листа «Параметры» (B4..B17).
+ * Чтение общих параметров расчёта с листа «Параметры» (B4..B18).
  * ВАЖНО: Параметры!B14 никогда не модифицируется калькулятором.
- * Если строк 15..17 ещё нет — мягко добавляет их со значениями по умолчанию.
+ * Если строк 15..18 ещё нет — мягко добавляет их со значениями по умолчанию.
  */
 function readCalcParams_() {
   const defaults = {
@@ -241,7 +244,8 @@ function readCalcParams_() {
     commissionDiscount: CFG.COMMISSION_DISCOUNT_DEFAULT,
     oldPriceMarkup: CFG.OLD_PRICE_MARKUP_DEFAULT !== undefined ? CFG.OLD_PRICE_MARKUP_DEFAULT : 0.40,
     localShareDefault: CFG.LOCAL_SHARE_DEFAULT !== undefined ? CFG.LOCAL_SHARE_DEFAULT : 0.50,
-    defectReserveRate: CFG.DEFECT_RESERVE_DEFAULT !== undefined ? CFG.DEFECT_RESERVE_DEFAULT : 0
+    defectReserveRate: CFG.DEFECT_RESERVE_DEFAULT !== undefined ? CFG.DEFECT_RESERVE_DEFAULT : 0,
+    noActionMarkup: CFG.NO_ACTION_MARKUP_DEFAULT !== undefined ? CFG.NO_ACTION_MARKUP_DEFAULT : 0.10
   };
 
   const par = ss_().getSheetByName('Параметры');
@@ -252,6 +256,7 @@ function readCalcParams_() {
   let hasOldPriceMarkupRow = false;
   let hasLocalShareRow = false;
   let hasDefectReserveRow = false;
+  let hasNoActionMarkupRow = false;
   rows.forEach(function (r, idx) {
     const label = String(r[0] || '').trim();
     const val = r[1];
@@ -299,6 +304,10 @@ function readCalcParams_() {
       hasDefectReserveRow = true;
       const f = calcToFraction_(val);
       if (f !== null && f >= 0 && f < 1) defaults.defectReserveRate = f;
+    } else if (/предельн.*без акц|без акц.*надбавк/i.test(label) || idx === 17) {
+      hasNoActionMarkupRow = true;
+      const f = calcToFraction_(val);
+      if (f !== null && f >= 0) defaults.noActionMarkup = f;
     }
   });
 
@@ -309,7 +318,7 @@ function readCalcParams_() {
         appendRows.push([
           'Надбавка для зачёркнутой цены (от целевой)',
           defaults.oldPriceMarkup,
-          'Рекомендованная зачёркнутая цена = ОкрВверх(Целевая цена × (1 + надбавка), шаг B11). По умолчанию +40% (0,40).'
+          'Рекомендованная зачёркнутая цена = ОкрВверх(Целевая Предельная × (1 + надбавка), шаг B11). По умолчанию +40% (0,40).'
         ]);
       }
       if (!hasLocalShareRow) {
@@ -324,6 +333,13 @@ function readCalcParams_() {
           'Резерв на брак, невыкуп и хранение (% от ЛК)',
           defaults.defectReserveRate,
           'Необязательная надбавка к ленд-косту на списание возвратного брака и платное хранение (по умолчанию 0%).'
+        ]);
+      }
+      if (!hasNoActionMarkupRow) {
+        appendRows.push([
+          'Надбавка для Предельной цены без акций (от целевой)',
+          defaults.noActionMarkup,
+          'Реком. Предельная цена без акций = ОкрВверх(Целевая Предельная × (1 + надбавка), шаг B11). По умолчанию +10% (0,10), чтобы соблюдалась лестница Ozon: Пол AG < Предельная AI ≤ Без акций BD < Зачёркнутая AO.'
         ]);
       }
       if (appendRows.length) {
@@ -704,7 +720,72 @@ function classifyAbcByProfit_(calcRows) {
 }
 
 /**
- * Проверка одной строки листа «Акции» относительно нашего минимального пола.
+ * Оценка участия товара в акции / «Эластичном бустинге» Ozon по новой механике «Предельной цены»
+ * и «Цены для минимального бустинга» (max_action_price из листа «Акции!G»):
+ *   • Сценарий 1 (target <= boostLimit): 🟢 В АКЦИИ (полная маржа) — ставим Предельную цену = target;
+ *   • Сценарий 2 (floor <= boostLimit < target): 🟡 ВЫБОР — ставим Предельную цену = boostLimit (мин. бустинг)
+ *     ИЛИ = target (выйти из бустинга на полную маржу);
+ *   • Сценарий 3 (boostLimit < floor): 🔴 ВЫЙТИ ИЗ АКЦИИ — ставим Предельную цену = target (> boostLimit),
+ *     что автоматически выводит товар из невыгодной акции Ozon.
+ */
+function evaluateItemBoosting_(floorRounded, targetRounded, itemActions) {
+  let boostLimit = null;
+  if (itemActions && itemActions.length) {
+    itemActions.forEach(function (item) {
+      const ar = item.row || [];
+      const mp = calcNum_(ar[6]);
+      if (mp !== null && mp > 0 && (boostLimit === null || mp < boostLimit)) {
+        boostLimit = mp;
+      }
+    });
+  }
+  const floor = calcNum_(floorRounded);
+  const target = calcNum_(targetRounded);
+
+  if (floor === null || floor <= 0 || target === null || target <= 0) {
+    return {
+      maxActionPrice: boostLimit !== null ? calcRound2_(boostLimit) : '',
+      scenario: 'BLOCKED',
+      recommendation: '— (нет расчёта цены)'
+    };
+  }
+
+  if (boostLimit === null || boostLimit <= 0) {
+    return {
+      maxActionPrice: '',
+      scenario: 'NO_ACTION',
+      recommendation: 'Вне акций: Предельная = ' + Math.round(target) + ' ₽'
+    };
+  }
+
+  if (target <= boostLimit + 1e-9) {
+    return {
+      maxActionPrice: calcRound2_(boostLimit),
+      scenario: 'IN_ACTION_TARGET',
+      recommendation: '🟢 В АКЦИИ (полная маржа): Предельная = ' + Math.round(target) +
+        ' ₽ (лимит ' + Math.round(boostLimit) + ' ₽)'
+    };
+  }
+
+  if (floor <= boostLimit + 1e-9) {
+    return {
+      maxActionPrice: calcRound2_(boostLimit),
+      scenario: 'CHOICE_BOOST_OR_MARGIN',
+      recommendation: '🟡 ВЫБОР: ' + Math.round(boostLimit) + ' ₽ (мин. бустинг) ИЛИ ' +
+        Math.round(target) + ' ₽ (выйти на полную маржу)'
+    };
+  }
+
+  return {
+    maxActionPrice: calcRound2_(boostLimit),
+    scenario: 'EXIT_ACTION',
+    recommendation: '🔴 ВЫЙТИ ИЗ АКЦИИ: поставить Предельную = ' + Math.round(target) +
+      ' ₽ (> ' + Math.round(boostLimit) + ' ₽)'
+  };
+}
+
+/**
+ * Проверка одной строки листа «Акции» относительно нашего минимального пола и «Цены для минимального бустинга».
  */
 function checkSheetActionRow_(floorPrice, maxActionPrice, actionPrice, ctx) {
   const floor = calcNum_(floorPrice);
@@ -738,8 +819,8 @@ function checkSheetActionRow_(floorPrice, maxActionPrice, actionPrice, ctx) {
       headroomRub: headroomRub,
       actionMarkupPct: actionMarkupPct,
       allowed: false,
-      status: 'КОНФЛИКТ: наш пол выше лимита Ozon',
-      warning: 'акция: наш минимальный пол (' + calcRound2_(floor) + ' ₽) выше лимита Ozon (' + calcRound2_(limit) + ' ₽)'
+      status: 'КОНФЛИКТ: наш пол выше лимита Ozon (выйти: Предельная > ' + calcRound2_(limit) + ' ₽)',
+      warning: 'акция: наш минимальный пол (' + calcRound2_(floor) + ' ₽) выше цены мин. бустинга Ozon (' + calcRound2_(limit) + ' ₽)'
     };
   }
 
@@ -749,8 +830,8 @@ function checkSheetActionRow_(floorPrice, maxActionPrice, actionPrice, ctx) {
       headroomRub: headroomRub,
       actionMarkupPct: actionMarkupPct,
       allowed: true,
-      status: 'ВНИМАНИЕ: цена акции ниже нашего пола',
-      warning: 'акция: текущая цена акции (' + calcRound2_(actP) + ' ₽) ниже нашего пола (' + calcRound2_(floor) + ' ₽)'
+      status: 'ВНИМАНИЕ: цена акции ниже нашего пола (поднять Предельную ≥ ' + calcRound2_(floor) + ' ₽)',
+      warning: 'акция: текущая Предельная цена (' + calcRound2_(actP) + ' ₽) ниже нашего пола (' + calcRound2_(floor) + ' ₽)'
     };
   }
 
@@ -759,7 +840,7 @@ function checkSheetActionRow_(floorPrice, maxActionPrice, actionPrice, ctx) {
     headroomRub: headroomRub,
     actionMarkupPct: actionMarkupPct,
     allowed: true,
-    status: 'ОК: пол ≤ лимита Ozon',
+    status: 'ОК: пол ≤ лимита Ozon' + (limit !== null && limit > 0 ? ' (в бустинге до ' + calcRound2_(limit) + ' ₽)' : ''),
     warning: null
   };
 }
@@ -871,6 +952,7 @@ function calculateUnitEconomics() {
     let buyoutFromSales = 0, buyoutFallback = 0;
     let drrFromSku = 0, drrFallback = 0;
     let belowMinMarkup = 0, belowTargetPrice = 0, actionConflicts = 0, unprotectedMinPrice = 0;
+    let boostInActionTarget = 0, boostChoice = 0, boostExitRequired = 0;
     let totalDeliveredUnits = 0, totalSalesRevenue = 0, totalVolumeProfit = 0, skusWithSales = 0;
     let inStockSkus = 0;
 
@@ -1048,6 +1130,7 @@ function calculateUnitEconomics() {
           totalLogistics: null,
           acquiring: acquiring
         };
+        const skippedBoost = evaluateItemBoosting_(null, null, actByOffer[oid] || []);
         calcRows.push([
           oid,
           sku ? (isNaN(Number(sku)) ? sku : Number(sku)) : '',
@@ -1093,6 +1176,9 @@ function calculateUnitEconomics() {
           '',
           '',
           totalStock,
+          '',
+          skippedBoost.maxActionPrice,
+          '',
           ''
         ]);
         return;
@@ -1141,6 +1227,12 @@ function calculateUnitEconomics() {
         : (CFG.OLD_PRICE_MARKUP_DEFAULT !== undefined ? CFG.OLD_PRICE_MARKUP_DEFAULT : 0.40);
       const recommendedOldRounded = (!priceBlocked && targetRounded !== null && targetRounded > 0)
         ? calcRoundUp_(targetRounded * (1 + oldMarkup), params.roundStep)
+        : null;
+      const noActMarkup = (params.noActionMarkup !== undefined && params.noActionMarkup !== null)
+        ? params.noActionMarkup
+        : (CFG.NO_ACTION_MARKUP_DEFAULT !== undefined ? CFG.NO_ACTION_MARKUP_DEFAULT : 0.10);
+      const recommendedNoActionRounded = (!priceBlocked && targetRounded !== null && targetRounded > 0)
+        ? calcRoundUp_(targetRounded * (1 + noActMarkup), params.roundStep)
         : null;
       const deltaRub = (!priceBlocked && curPrice !== null && curPrice > 0 && targetRounded !== null)
         ? (curPrice - targetRounded)
@@ -1223,7 +1315,7 @@ function calculateUnitEconomics() {
         acquiring: acq
       };
 
-      // Проверка ограничений акций по всем строкам листа «Акции» для этого SKU
+      // Проверка ограничений акций и расчёт решения по «Цене для минимального бустинга» для этого SKU
       let actSummary = '—';
       const itemActions = actByOffer[oid] || [];
       if (itemActions.length) {
@@ -1241,6 +1333,10 @@ function calculateUnitEconomics() {
         if (hasConflict) actionConflicts++;
         actSummary = statuses.join(' | ');
       }
+      const boostDecision = evaluateItemBoosting_(floorRounded, targetRounded, itemActions);
+      if (boostDecision.scenario === 'IN_ACTION_TARGET') boostInActionTarget++;
+      else if (boostDecision.scenario === 'CHOICE_BOOST_OR_MARGIN') boostChoice++;
+      else if (boostDecision.scenario === 'EXIT_ACTION') boostExitRequired++;
 
       const statusText = priceBlocked
         ? ('БЛОК ЦЕНЫ: ' + warnings.join('; '))
@@ -1299,7 +1395,10 @@ function calculateUnitEconomics() {
         fboTargetRounded !== null ? calcRound2_(fboTargetRounded) : '',
         fboAdvantageRub !== null ? calcRound2_(fboAdvantageRub) : '',
         totalStock,
-        ''
+        '',
+        boostDecision.maxActionPrice,
+        boostDecision.recommendation,
+        recommendedNoActionRounded !== null ? calcRound2_(recommendedNoActionRounded) : ''
       ]);
     });
 
@@ -1360,6 +1459,9 @@ function calculateUnitEconomics() {
       unprotectedMinPrice: unprotectedMinPrice,
       inStockSkus: inStockSkus,
       actionConflicts: actionConflicts,
+      boostInActionTarget: boostInActionTarget,
+      boostChoice: boostChoice,
+      boostExitRequired: boostExitRequired,
       actionsChecked: actChecked,
       actionsAllowed: actAllowed,
       actionsBelowFloor: actBelowFloor,
@@ -1422,11 +1524,11 @@ function calculateUnitEconomics() {
 // =====================================================================
 
 /**
- * Формирует 3 строки верхней закреплённой KPI-панели на листе «Расчёт» (53 колонки).
+ * Формирует 3 строки верхней закреплённой KPI-панели на листе «Расчёт» (56 колонок).
  * ВАЖНО: все подписи и значения размещаются в главных колонках, которые остаются
  * видимыми при свёрнутых группах [+]: A(0), B(1), C(2), D(3), E(4), I(8), O(14), Q(16),
  * U(20), Y(24), AF(31), AG(32), AI(34), AJ(35), AM(38), AN(39), AO(40), AP(41), AT(45),
- * AU(46), AY(50), AZ(51), BA(52).
+ * AU(46), AY(50), AZ(51), BA(52), BB(53), BC(54), BD(55).
  */
 function buildCalcKpiBanner_(summary, params) {
   const r1 = new Array(CFG.CALC_COLS).fill('');
@@ -1439,6 +1541,7 @@ function buildCalcKpiBanner_(summary, params) {
   const minMpPct = Math.round((params.minMarkup || 0) * 10000) / 100;
   const tgtMpPct = Math.round((params.targetMarkup || 0) * 10000) / 100;
   const oldMpPct = Math.round(((params.oldPriceMarkup !== undefined ? params.oldPriceMarkup : 0.40) || 0) * 10000) / 100;
+  const noActMpPct = Math.round(((params.noActionMarkup !== undefined ? params.noActionMarkup : 0.10) || 0) * 10000) / 100;
   const locPct = Math.round(((params.localShareDefault !== undefined ? params.localShareDefault : 0.50) || 0) * 10000) / 100;
 
   // Строка 1 — заголовки KPI-плашек
@@ -1465,6 +1568,9 @@ function buildCalcKpiBanner_(summary, params) {
   r1[50] = 'Сравнение FBO к FBS';
   r1[51] = 'В наличии (FBO+FBS)';
   r1[52] = 'Не защищены min_price';
+  r1[53] = 'Бустинг (в акции / выбор)';
+  r1[54] = 'Выйти из акции (Предельная > BB)';
+  r1[55] = 'Предельная без акций';
 
   // Строка 2 — значения KPI-плашек
   r2[0]  = 'Сводка по магазину';
@@ -1492,10 +1598,13 @@ function buildCalcKpiBanner_(summary, params) {
   r2[50] = 'Выгода ₽/шт на FBO';
   r2[51] = (summary.inStockSkus || 0) + ' SKU > 0 шт';
   r2[52] = (summary.unprotectedMinPrice || 0) + ' SKU (< пола AG)';
+  r2[53] = '🟢 ' + (summary.boostInActionTarget || 0) + '  |  🟡 ' + (summary.boostChoice || 0) + ' SKU';
+  r2[54] = '🔴 ' + (summary.boostExitRequired || 0) + ' SKU (пол AG > лимита BB)';
+  r2[55] = '+' + noActMpPct + '% к целевой (B18)';
 
   // Строка 3 — подсказка по навигации и легенда светофора
   r3[0]  = '💡 Раскройте [+] над столбцами для деталей затрат и налогов';
-  r3[2]  = 'Фильтр [▼] в строке 4 позволяет отобрать группу (D), товары в наличии (AZ > 0) или класс A (BA)';
+  r3[2]  = 'Фильтр [▼] в строке 4 позволяет отобрать группу (D), товары в наличии (AZ > 0), класс A (BA) или решение по бустингу (BC)';
   r3[20] = '🟢 Зелёный: наценка ≥ цели, акция ОК';
   r3[24] = '🟡 Жёлтый: ниже цели или ниже нашего пола';
   r3[38] = '🔴 Красный: убыток (<0%) или пол > лимита Ozon';
@@ -1503,6 +1612,7 @@ function buildCalcKpiBanner_(summary, params) {
   r3[41] = 'Раскройте [+] справа от AP для % отклонения и выручки';
   r3[46] = 'ROS (AU) = Прибыль / Цена | ROI (Y) = Прибыль / Ленд-кост';
   r3[50] = 'Раскройте [+] слева от AY для источника ДРР, гео МСК и цены FBO';
+  r3[53] = 'Чтобы убрать товар из невыгодной акции Ozon, поставьте Предельную цену (AI) выше Цены для мин. бустинга (BB)';
 
   return [r1, r2, r3];
 }
@@ -1615,12 +1725,16 @@ function styleCalcSheet_(sh, calcRows, summary, params) {
   topBgs[1][51] = '#e6f4ea'; topFcs[1][51] = '#137333';
   topBgs[1][52] = (summary && summary.unprotectedMinPrice > 0) ? '#fef7e0' : '#e6f4ea';
   topFcs[1][52] = (summary && summary.unprotectedMinPrice > 0) ? '#b06000' : '#137333';
+  topBgs[1][53] = '#e6f4ea'; topFcs[1][53] = '#137333';
+  topBgs[1][54] = (summary && summary.boostExitRequired > 0) ? '#fce8e6' : '#e6f4ea';
+  topFcs[1][54] = (summary && summary.boostExitRequired > 0) ? '#c5221f' : '#137333';
+  topBgs[1][55] = '#ede7f6'; topFcs[1][55] = '#4a235a';
 
   // Цветовое кодирование 7 смысловых блоков в строке 4 (шапка таблицы)
   const primaryCols = {
     0:1, 1:1, 2:1, 3:1, 4:1, 8:1, 14:1, 16:1, 20:1, 24:1,
     31:1, 32:1, 34:1, 35:1, 38:1, 39:1, 40:1, 41:1, 45:1,
-    46:1, 50:1, 51:1, 52:1
+    46:1, 50:1, 51:1, 52:1, 53:1, 54:1, 55:1
   };
   for (let c = 0; c < cols; c++) {
     const isPrim = Boolean(primaryCols[c]);
@@ -1717,7 +1831,10 @@ function styleCalcSheet_(sh, calcRows, summary, params) {
       '#,##0',           // 50 AX: Целевая цена FBO, ₽
       '+#,##0;-#,##0;0', // 51 AY: Выгода FBO к FBS, ₽/шт
       '#,##0',           // 52 AZ: Остаток всего (FBO+FBS), шт
-      '@'                // 53 BA: ABC по прибыли
+      '@',               // 53 BA: ABC по прибыли
+      '#,##0',           // 54 BB: Цена для мин. бустинга (акция Ozon), ₽
+      '@',               // 55 BC: Решение по акции / бустингу (Предельная цена)
+      '#,##0'            // 56 BD: Реком. Предельная цена без акций, ₽
     ];
     const fmts = new Array(n);
 
@@ -1738,13 +1855,14 @@ function styleCalcSheet_(sh, calcRows, summary, params) {
         rowBg[39] = '#e8eaed';
         rowFc[39] = '#5f6368';
       } else {
-        // Выделяем ключевые расчётные колонки (Ленд-кост, Логистика с возвр., Наш пол, Целевая цена, Реком. old_price)
+        // Выделяем ключевые расчётные колонки (Ленд-кост, Логистика с возвр., Наш пол, Целевая Предельная, Реком. зачёркнутая, Реком. без акций)
         rowFw[0]  = 'bold';
         rowFw[8]  = 'bold';
         rowFw[14] = 'bold';
         rowBg[32] = '#f3e8fd'; rowFc[32] = '#4a235a'; rowFw[32] = 'bold'; // AG: Наш пол акций
-        rowBg[34] = '#ede7f6'; rowFc[34] = '#311b92'; rowFw[34] = 'bold'; // AI: Целевая цена
+        rowBg[34] = '#ede7f6'; rowFc[34] = '#311b92'; rowFw[34] = 'bold'; // AI: Целевая Предельная цена
         rowBg[40] = '#f3e8fd'; rowFc[40] = '#4a235a'; rowFw[40] = 'bold'; // AO: Реком. зачёркнутая цена
+        rowBg[55] = '#f3e8fd'; rowFc[55] = '#4a235a'; rowFw[55] = 'bold'; // BD: Реком. Предельная цена без акций
 
         // Схема FBO / FBS
         if (r[4] === 'FBO') {
@@ -1871,6 +1989,27 @@ function styleCalcSheet_(sh, calcRows, summary, params) {
             rowBg[52] = '#fce8e6'; rowFc[52] = '#c5221f'; rowFw[52] = 'bold';
           }
 
+          // Светофор для Цены мин. бустинга (BB) и Решения по бустингу (BC)
+          const boostLimitVal = calcNum_(r[53]);
+          const boostRecText = String(r[54] || '');
+          if (boostLimitVal !== null && boostLimitVal > 0 && floorP !== null && targetP !== null) {
+            rowFw[53] = 'bold';
+            if (boostLimitVal < floorP - 1e-9) {
+              rowBg[53] = '#fce8e6'; rowFc[53] = '#c5221f';
+            } else if (boostLimitVal < targetP - 1e-9) {
+              rowBg[53] = '#fef7e0'; rowFc[53] = '#b06000';
+            } else {
+              rowBg[53] = '#e6f4ea'; rowFc[53] = '#137333';
+            }
+          }
+          if (boostRecText.indexOf('🟢') === 0) {
+            rowBg[54] = '#e6f4ea'; rowFc[54] = '#137333'; rowFw[54] = 'bold';
+          } else if (boostRecText.indexOf('🟡') === 0) {
+            rowBg[54] = '#fef7e0'; rowFc[54] = '#b06000'; rowFw[54] = 'bold';
+          } else if (boostRecText.indexOf('🔴') === 0) {
+            rowBg[54] = '#fce8e6'; rowFc[54] = '#c5221f'; rowFw[54] = 'bold';
+          }
+
           // Светофор для общего статуса (AN)
           if (statusText === 'ОК') {
             rowBg[39] = '#e6f4ea'; rowFc[39] = '#137333'; rowFw[39] = 'bold';
@@ -1927,7 +2066,10 @@ function styleCalcSheet_(sh, calcRows, summary, params) {
     47: 125, // AU: Маржинальность цены (ROS), %
     51: 125, // AY: Выгода FBO к FBS, ₽/шт
     52: 120, // AZ: Остаток всего (FBO+FBS), шт
-    53: 135  // BA: ABC по прибыли
+    53: 135, // BA: ABC по прибыли
+    54: 130, // BB: Цена для мин. бустинга (акция Ozon), ₽
+    55: 290, // BC: Решение по акции / бустингу (Предельная цена)
+    56: 135  // BD: Реком. Предельная цена без акций, ₽
   };
   Object.keys(widths).forEach(function (colKey) {
     try { sh.setColumnWidth(Number(colKey), widths[colKey]); } catch (e) {}
@@ -2093,7 +2235,7 @@ function styleParamsSheet_(sh) {
     sh.setFrozenRows(3);
     sh.getRange(1, 1, 1, 3).setBackground('#1a73e8').setFontColor('#ffffff').setFontWeight('bold');
     sh.getRange(3, 1, 1, 3).setBackground('#202124').setFontColor('#ffffff').setFontWeight('bold');
-    const lastR = Math.min(sh.getLastRow(), 17);
+    const lastR = Math.min(sh.getLastRow(), 18);
     if (lastR >= 4) {
       sh.getRange(4, 1, lastR - 3, 1).setFontWeight('bold').setBackground('#f8f9fa');
       sh.getRange(4, 2, Math.min(10, lastR - 3), 1).setBackground('#e8f0fe').setFontColor('#1967d2').setFontWeight('bold');
@@ -2125,6 +2267,7 @@ function refreshProjectSheet_(ss, summary, params) {
     const minMpPct = Math.round((p.minMarkup || 0) * 10000) / 100;
     const tgtMpPct = Math.round((p.targetMarkup || 0) * 10000) / 100;
     const oldMpPct = Math.round(((p.oldPriceMarkup !== undefined ? p.oldPriceMarkup : 0.40) || 0) * 10000) / 100;
+    const noActMpPct = Math.round(((p.noActionMarkup !== undefined ? p.noActionMarkup : 0.10) || 0) * 10000) / 100;
     const drrPct = Math.round((p.drr || 0) * 10000) / 100;
     const locPct = Math.round(((p.localShareDefault !== undefined ? p.localShareDefault : 0.50) || 0) * 10000) / 100;
     const defResPct = Math.round(((p.defectReserveRate !== undefined ? p.defectReserveRate : 0) || 0) * 10000) / 100;
@@ -2132,17 +2275,18 @@ function refreshProjectSheet_(ss, summary, params) {
     const rows = [
       ['ПАСПОРТ ПРОЕКТА «OZON UNIT — РАБОЧАЯ МОДЕЛЬ»', 'Актуализировано автоматически: ' + (s.updatedAt || '')],
       ['Раздел / Показатель', 'Текущий статус и живые метрики книги'],
-      ['Статус этапов проекта', 'Э0 (Каркас) ✅ | Э1 (Синхронизация Ozon) ✅ | Э2 (Факт наценки и ROS) ✅ | Э3 (Целевая цена, FBO vs FBS, пол акций) ✅ | Э6 (UX, ABC, защита min_price) ✅ | Э5 (Экспорт цен в Ozon) ⏸ вне скоупа'],
-      ['Главные рабочие листы', '1. «Расчёт» (53 кол. A..BA, KPI-шапка + группы [+/-])  |  2. «Акции» (15 кол., контроль пола L:O)  |  3. «Проблемы данных»'],
-      ['Листы настроек и базы 1С', '4. «Параметры» (B4:B17)  |  5. «Настройки расчёта» (каскад SKU → группа → общая)  |  6. «Номенклатура» (база SKU и СС 1С)'],
+      ['Статус этапов проекта', 'Э0 (Каркас) ✅ | Э1 (Синхронизация Ozon) ✅ | Э2 (Факт наценки и ROS) ✅ | Э3 (Предельная цена, бустинг, FBO vs FBS) ✅ | Э6 (UX, ABC, защита min_price) ✅ | Э5 (Экспорт цен в Ozon) ⏸ вне скоупа'],
+      ['Главные рабочие листы', '1. «Расчёт» (56 кол. A..BD, KPI-шапка + группы [+/-])  |  2. «Акции» (15 кол., контроль пола и бустинга L:O)  |  3. «Проблемы данных»'],
+      ['Листы настроек и базы 1С', '4. «Параметры» (B4:B18)  |  5. «Настройки расчёта» (каскад SKU → группа → общая)  |  6. «Номенклатура» (база SKU и СС 1С)'],
       ['Авто-листы Ozon API', '7. «Факт Ozon»  |  8. «Комиссия факт»  |  9. «Продажи» (с гео кластера МСК R..U)  |  10. «Реклама ДРР»  |  11. «Лог»'],
       ['Всего артикулов в «Номенклатуре»', (s.total || 0) + ' SKU (товарных групп в «Номенклатура!P»: ' + (s.productGroupsCount || 0) + ', в наличии FBO+FBS > 0: ' + (s.inStockSkus || 0) + ' SKU)'],
       ['Покрытие расчёта Э2/Э3', 'Рассчитано: ' + (s.calculated || 0) + ' SKU  |  Пропущено без СС/кратности 1С: ' + (s.skippedNoCost || 0) + ' SKU  |  Блок (выкуп 0%): ' + (s.blockedZeroBuyout || 0) + ' SKU'],
       ['Источники комиссии, выкупа и ДРР', 'Комиссия: факт ' + (s.commFromFact || 0) + ' / Ozon ' + (s.commFromFallback || 0) + '  |  Выкуп: Продажи ' + (s.buyoutFromSales || 0) + ' / B8 ' + (s.buyoutFallback || 0) + '  |  ДРР: по SKU ' + (s.drrFromSku || 0) + ' / B4 ' + (s.drrFallback || 0)],
-      ['Параметры расчёта (Параметры!B4:B17)', 'Формула запаса цены: 1 − Комиссия − ДРР  |  ДРР по умолч.: ' + drrPct + '%  |  Цель ROI: ' + tgtMpPct + '% / Мин. ROI: ' + minMpPct + '%  |  Зачёркн. цена: +' + oldMpPct + '%  |  Доля МСК: ' + locPct + '%  |  Резерв брака/хранения: ' + defResPct + '%'],
-      ['Как читать Наценку (ROI, кол. Y) vs Маржинальность (ROS, кол. AU)', 'Наценка к ленд-косту (ROI) = Прибыль / Ленд-кост (отдача на вложенный в товар рубль: при цели 30% на каждые 100 ₽ себестоимости зарабатываем 30 ₽). Маржинальность цены (ROS) = Прибыль / Цена с акцией (доля чистой прибыли в чеке покупателя и запас прочности к скидке/рекламе: если ROS = 8%, то дополнительная скидка 8% или рост ДРР на +8 п.п. обнулит прибыль).'],
+      ['Параметры расчёта (Параметры!B4:B18)', 'Формула запаса цены: 1 − Комиссия − ДРР  |  ДРР по умолч.: ' + drrPct + '%  |  Цель ROI: ' + tgtMpPct + '% / Мин. ROI: ' + minMpPct + '%  |  Без акций (B18): +' + noActMpPct + '%  |  Зачёркн. цена (B15): +' + oldMpPct + '%  |  Доля МСК: ' + locPct + '%  |  Резерв брака: ' + defResPct + '%'],
+      ['Новые правила цен и акций Ozon (сентябрь 2026)', '«Предельная цена» (кол. U и AI) — единая цена в разделах «Цены» и «Акции от Ozon» (вкл. «Эластичный бустинг» и «Скидка на сток»). Чтобы убрать товар из невыгодной акции, поставьте «Предельную цену» (AI) выше «Цены для минимального бустинга» (кол. BB) — см. готовое решение в кол. BC. Лестница цен для ЛК Ozon: Ограничение AG < Предельная AI ≤ Предельная без акций BD < Зачёркнутая AO. Помните: «Ограничение для акций» (min_price) в ЛК Ozon автоотключается через 30 дней.'],
+      ['Как читать Наценку (ROI, кол. Y) vs Маржинальность (ROS, кол. AU)', 'Наценка к ленд-косту (ROI) = Прибыль / Ленд-кост (отдача на вложенный в товар рубль: при цели 30% на каждые 100 ₽ себестоимости зарабатываем 30 ₽). Маржинальность цены (ROS) = Прибыль / Предельная цена (доля чистой прибыли в чеке покупателя и запас прочности к скидке/рекламе: если ROS = 8%, то дополнительная скидка 8% или рост ДРР на +8 п.п. обнулит прибыль).'],
       ['Контроль рентабельности и защиты min_price', 'В норме (≥ целевой цены): ' + Math.max(0, (s.calculated || 0) - (s.belowTargetPrice || 0)) + ' SKU  |  Ниже целевой: ' + (s.belowTargetPrice || 0) + ' SKU  |  Ниже мин. наценки: ' + (s.belowMinMarkup || 0) + ' SKU  |  Не защищены min_price (< пола AG): ' + (s.unprotectedMinPrice || 0) + ' SKU'],
-      ['Контроль акций Ozon (лист «Акции»)', 'Проверено строк: ' + (s.actionsChecked || 0) + '  |  Проходят лимит (пол ≤ макс. цены Ozon): ' + (s.actionsAllowed || 0) + '  |  Конфликт / блок: ' + (s.actionsBlocked || 0)],
+      ['Контроль акций и бустинга Ozon', 'Строк в «Акциях»: ' + (s.actionsChecked || 0) + ' (проходят лимит: ' + (s.actionsAllowed || 0) + ', конфликт: ' + (s.actionsBlocked || 0) + ')  |  По товарам (кол. BC): 🟢 В акции с полной маржой: ' + (s.boostInActionTarget || 0) + ' SKU  |  🟡 Выбор (бустинг vs маржа): ' + (s.boostChoice || 0) + ' SKU  |  🔴 Выйти из акции (Предельная > BB): ' + (s.boostExitRequired || 0) + ' SKU'],
       ['Объём продаж и прибыль за период («Продажи»)', 'Выкуплено: ' + (s.totalDeliveredUnits || 0) + ' шт (' + (s.skusWithSales || 0) + ' SKU с продажами)  |  Выручка: ' + (s.totalSalesRevenue || 0) + ' ₽  |  Расчётная прибыль до налогов на объём: ' + (s.totalVolumeProfit || 0) + ' ₽'],
       ['Правило безопасности Э5', 'Калькулятор работает строго внутри Google Таблицы и НЕ отправляет цены в Ozon API (/v1/product/import/prices не вызывается).']
     ];

@@ -397,6 +397,89 @@ function recommendedOldPrice(targetPrice, oldPriceMarkup, step) {
 }
 
 /**
+ * Расчёт рекомендованной «Предельной цены без акций» (price) от целевой «Предельной цены»
+ * по надбавке из Параметры!B18 (по умолчанию +10% = 0.10) с округлением вверх по шагу B11.
+ * По правилам Ozon (сентябрь 2026) должна выполняться лестница:
+ *   Ограничение для акций (AG) < Предельная цена (AI) <= Предельная цена без акций (BD) < Зачёркнутая цена (AO).
+ */
+function recommendedNoActionPrice(targetPrice, noActionMarkup, step) {
+  const t = num(targetPrice);
+  if (t === null || t <= 0) return null;
+  let m = toFractionRate(noActionMarkup);
+  if (m === null || m < 0) m = 0.10;
+  const raw = t * (1 + m);
+  const s = num(step);
+  const rounded = (s !== null && s > 0) ? roundPriceUp(raw, s) : raw;
+  return rounded !== null && rounded < t ? t : rounded;
+}
+
+/**
+ * Оценка участия товара в акции / «Эластичном бустинге» Ozon по новой механике «Предельной цены»
+ * и «Цены для минимального бустинга» (max_action_price):
+ *   • Сценарий 1 (targetPrice <= maxActionPrice): 🟢 В АКЦИИ (полная маржа) — ставим Предельную цену = targetPrice;
+ *   • Сценарий 2 (floorPrice <= maxActionPrice < targetPrice): 🟡 ВЫБОР — ставим Предельную цену = maxActionPrice
+ *     (остаться в мин. бустинге с наценкой ≥ мин. пола) ИЛИ = targetPrice (выйти из бустинга ради полной маржи);
+ *   • Сценарий 3 (maxActionPrice < floorPrice): 🔴 ВЫЙТИ ИЗ АКЦИИ — ставим Предельную цену = targetPrice (> maxActionPrice),
+ *     что автоматически выводит товар из невыгодной акции Ozon.
+ */
+function evaluateActionBoosting(floorPrice, targetPrice, maxActionPrice) {
+  const floor = num(floorPrice);
+  const target = num(targetPrice);
+  const boostLimit = num(maxActionPrice);
+
+  if (floor === null || floor <= 0 || target === null || target <= 0) {
+    return {
+      maxActionPrice: (boostLimit !== null && boostLimit > 0) ? boostLimit : null,
+      scenario: 'BLOCKED',
+      recommendedLimitPrice: null,
+      exitActionRequired: false,
+      recommendation: '— (нет расчёта цены)'
+    };
+  }
+
+  if (boostLimit === null || boostLimit <= 0) {
+    return {
+      maxActionPrice: null,
+      scenario: 'NO_ACTION',
+      recommendedLimitPrice: target,
+      exitActionRequired: false,
+      recommendation: 'Вне акций: Предельная = ' + Math.round(target) + ' ₽'
+    };
+  }
+
+  if (target <= boostLimit + 1e-9) {
+    return {
+      maxActionPrice: boostLimit,
+      scenario: 'IN_ACTION_TARGET',
+      recommendedLimitPrice: target,
+      exitActionRequired: false,
+      recommendation: '🟢 В АКЦИИ (полная маржа): Предельная = ' + Math.round(target) +
+        ' ₽ (лимит ' + Math.round(boostLimit) + ' ₽)'
+    };
+  }
+
+  if (floor <= boostLimit + 1e-9) {
+    return {
+      maxActionPrice: boostLimit,
+      scenario: 'CHOICE_BOOST_OR_MARGIN',
+      recommendedLimitPrice: boostLimit,
+      exitActionRequired: false,
+      recommendation: '🟡 ВЫБОР: ' + Math.round(boostLimit) + ' ₽ (мин. бустинг) ИЛИ ' +
+        Math.round(target) + ' ₽ (выйти на полную маржу)'
+    };
+  }
+
+  return {
+    maxActionPrice: boostLimit,
+    scenario: 'EXIT_ACTION',
+    recommendedLimitPrice: target,
+    exitActionRequired: true,
+    recommendation: '🔴 ВЫЙТИ ИЗ АКЦИИ: поставить Предельную = ' + Math.round(target) +
+      ' ₽ (> ' + Math.round(boostLimit) + ' ₽)'
+  };
+}
+
+/**
  * Классификация артикула в понятную товарную группу / бренд по Offer id и названию.
  * Используется для автозаполнения пустых ячеек «Номенклатура!P» (ручные значения не перезаписывает).
  */
@@ -767,6 +850,9 @@ function unitEconomics(sku) {
   const recOldPrice = !priceBlocked
     ? recommendedOldPrice(targetRounded !== null ? targetRounded : target, sku.oldPriceMarkup, step)
     : null;
+  const recNoActionPrice = !priceBlocked
+    ? recommendedNoActionPrice(targetRounded !== null ? targetRounded : target, sku.noActionMarkup, step)
+    : null;
 
   // --- Сравнение FBO vs FBS (Идея 3) ---
   let fboTargetRounded = null;
@@ -833,6 +919,17 @@ function unitEconomics(sku) {
       })
     : [];
 
+  let minMaxActionPrice = num(sku.maxActionPrice);
+  if (minMaxActionPrice === null && actionChecks.length) {
+    actionChecks.forEach(function (act) {
+      const mp = num(act.maxActionPrice !== undefined ? act.maxActionPrice : act.max_action_price);
+      if (mp !== null && mp > 0 && (minMaxActionPrice === null || mp < minMaxActionPrice)) {
+        minMaxActionPrice = mp;
+      }
+    });
+  }
+  const boostingDecision = evaluateActionBoosting(effectiveFloorForActions, effectiveTarget, minMaxActionPrice);
+
   const warnings = [
     buyoutInfo.warning,
     drrInfo.warning,
@@ -883,12 +980,14 @@ function unitEconomics(sku) {
       targetRounded,
       actionFloorRounded: floorRounded,
       breakEvenRounded,
+      recommendedNoActionPrice: recNoActionPrice,
       recommendedOldPrice: recOldPrice,
       deltaRub,
       deltaPercent,
       fboTargetRounded,
       fboAdvantageRub
     },
+    boostingDecision,
     minPriceProtection,
     stock: {
       fbo: stockFbo,
@@ -954,6 +1053,8 @@ module.exports = {
   classifyAbcByProfit,
   roundPriceUp,
   recommendedOldPrice,
+  recommendedNoActionPrice,
+  evaluateActionBoosting,
   inferProductGroup,
   taxBreakdown,
   checkActionConstraint,
