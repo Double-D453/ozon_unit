@@ -405,6 +405,15 @@ assert(resFromMap.sync1c.filledCode1c === 1 && resFromMap.sync1c.filledCost === 
 const nomMirka = nom.getRange(7, 4, 1, 3).getValues()[0];
 assert(nomMirka[0] === '00000000006' && nomMirka[1] === 'Мирка из Сопоставления' && Math.abs(nomMirka[2] - 120) < 0.01,
   'Номенклатура!D:F для Mirka должны обновиться из «Сопоставления» и «Себестоимость 1С МСК»');
+
+// Проверяем расчёт % выкупа по завершённым выдачам J / (J + K) и защиту от малой выборки (< 10 шт.)
+const bSmall = resolveItemBuyout_(23.08, 1.0, ['ESPRESSO', 1, 'Шпон', 10000, 26, '', '', '', '', 6, 0, 1, 23.08], 10);
+assert(bSmall.percent === 100 && bSmall.source === 'Параметры!B8' && String(bSmall.warning).indexOf('малая выборка') >= 0,
+  'При выборке 6 доставленных (< 10 шт.) и 20 заказах в пути выкуп берётся из Параметры!B8 (100%), а не 23.08%');
+const bCompleted = resolveItemBuyout_(50, 1.0, ['Щит', 2, 'Щит', 50000, 38, '', '', '', '', 19, 1, 5, 50], 10);
+near(bCompleted.percent, 95, 0.01, 'При выборке 19 доставленных и 1 возврате (>= 10 шт.) выкуп считается как 19/(19+1) = 95% (без заказов в пути и отмен)');
+assert(bCompleted.source === 'Продажи!M', 'При выборке >= 10 шт. источник выкупа — Продажи!M');
+
 onOpen();
 
 console.log('РАСЧЁТ Э2/Э3 И UX/UI (calculation.js): ВСЕ ПРОВЕРКИ ПРОШЛИ ✓');

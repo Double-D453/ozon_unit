@@ -905,9 +905,11 @@ function syncSales(days) {
       if (!offer) noOffer++;
       sumRev += rev; sumUnits += units;
       if (premium) { sumDeliv += Number(deliv); sumRet += Number(ret); sumCancel += Number(canc); }
-      // % выкупа = доставлено / заказано. Именно его владелец просил брать средним по SKU.
-      const buyout = (premium && delivOk && units > 0 && Number(deliv) > 0)
-        ? Math.round(Number(deliv) / units * 10000) / 100 : '';
+      // % выкупа = Доставлено / (Доставлено + Возвраты) — по завершённым выдачам,
+      // чтобы заказы «в пути» и бесплатные отмены до отгрузки не искажали обратную логистику.
+      const completedUnits = (Number(deliv) || 0) + (Number(ret) || 0);
+      const buyout = (premium && delivOk && completedUnits > 0)
+        ? Math.round((Number(deliv) || 0) / completedUnits * 10000) / 100 : '';
       rows.push([
         offer, sku, r.name || '',
         Math.round(rev * 100) / 100, units,
@@ -951,13 +953,17 @@ function syncSales(days) {
       sh.getRange(2, 6, rows.length, 2).setNumberFormat('#,##0.00');
       sh.getRange(2, 13, rows.length, 1).setNumberFormat('0.00');
     }
+    const sumCompleted = sumDeliv + sumRet;
+    const totalBuyoutPct = (premium && delivOk && sumCompleted > 0)
+      ? Math.round(sumDeliv / sumCompleted * 10000) / 100
+      : '';
     sh.getRange(1, 15, 8, 2).setValues([
       ['Выручка всего, ₽', Math.round(sumRev * 100) / 100],
       ['Заказано, шт', sumUnits],
       ['Доставлено, шт', premium ? sumDeliv : 'нет Premium-метрик'],
       ['Возвраты, шт', premium ? sumRet : ''],
       ['Отмены, шт', premium ? sumCancel : ''],
-      ['% выкупа (всего)', (premium && delivOk && sumUnits) ? Math.round(sumDeliv / sumUnits * 10000) / 100 : 'нет данных'],
+      ['% выкупа (всего)', totalBuyoutPct !== '' ? totalBuyoutPct : 'нет данных'],
       ['Период', label],
       ['Обновлено', today]
     ]).setFontWeight('bold');
@@ -995,10 +1001,10 @@ function syncSales(days) {
       ' ₽, заказано ' + sumUnits + ' шт за ' + label + '. Не нашлось в «Номенклатуре»: ' + noOffer +
       ' SKU. Метрики: ' + (premium ? 'Premium Plus (с доставкой/возвратами/отменами)' : 'базовые') + '.');
 
-    if (premium && delivOk && sumUnits > 0) {
-      logMsg_('INFO', 'Продажи: % выкупа в среднем ' + Math.round(sumDeliv / sumUnits * 10000) / 100 +
-        '% (доставлено ' + sumDeliv + ' из ' + sumUnits + ' заказанных), возвраты ' + sumRet +
-        ' шт, отмены ' + sumCancel + ' шт.');
+    if (premium && delivOk && sumCompleted > 0) {
+      logMsg_('INFO', 'Продажи: % выкупа (без заказов в пути и отмен) ' + totalBuyoutPct +
+        '% (доставлено ' + sumDeliv + ', возвраты ' + sumRet + ' шт; всего заказано ' + sumUnits +
+        ', отмены ' + sumCancel + ' шт).');
     }
     if (sumRev > 0) {
       logMsg_('INFO', 'Продажи: выручка сохранена — она будет знаменателем ДРР в меню ' +
@@ -1008,7 +1014,7 @@ function syncSales(days) {
     return { ok: true, sku: rows.length, revenue: Math.round(sumRev), units: sumUnits,
              premiumMetrics: premium, delivered: (premium && delivOk) ? sumDeliv : '',
              returns: premium ? sumRet : '', cancellations: premium ? sumCancel : '',
-             buyoutPercent: (premium && delivOk && sumUnits) ? Math.round(sumDeliv / sumUnits * 10000) / 100 : '',
+             buyoutPercent: totalBuyoutPct,
              period: label, seconds: Math.round((Date.now() - t0) / 1000) };
   } catch (e) {
     logMsg_('ERROR', 'syncSales: ' + e.message);

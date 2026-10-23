@@ -849,9 +849,11 @@ function resolveItemMarkups_(offerId, sku, category, settings, params) {
 }
 
 /**
- * Валидация выкупа из «Продажи!M» (0–100%) с фолбэком на «Параметры!B8».
+ * Валидация выкупа из «Продажи!M» (0–100%) с расчётом по завершённым выдачам
+ * Доставлено / (Доставлено + Возвраты) (колонки J и K), защитой от малой выборки (< 10 шт.)
+ * и фолбэком на «Параметры!B8».
  */
-function resolveItemBuyout_(salesRaw, defaultBuyout) {
+function resolveItemBuyout_(salesRaw, defaultBuyout, sRow, minSampleUnits) {
   const defRate = (defaultBuyout !== null && defaultBuyout !== undefined && defaultBuyout >= 0 && defaultBuyout <= 1)
     ? defaultBuyout
     : 1;
@@ -936,6 +938,38 @@ function resolveItemBuyout_(salesRaw, defaultBuyout) {
       blocked: defRate === 0,
       warning: 'выкуп: значение > 100% в Продажи!M, взят Параметры!B8'
     };
+  }
+
+  // Если передана строка «Продажи» с колонками J («Доставлено, шт») и K («Возвраты, шт»):
+  // 1) считаем % выкупа строго по завершённым выдачам J / (J + K), без заказов «в пути» и бесплатных отмен;
+  // 2) при малой выборке завершённых выдач (< minSample, по умолчанию 10 шт.) используем норматив Параметры!B8.
+  if (sRow && sRow.length >= 11) {
+    const deliv = calcNum_(sRow[9]);
+    const ret = calcNum_(sRow[10]);
+    if (deliv !== null && deliv > 0 && ret !== null && ret >= 0) {
+      const completed = deliv + ret;
+      const minSample = (minSampleUnits !== undefined && minSampleUnits !== null && minSampleUnits > 0)
+        ? minSampleUnits
+        : ((typeof CFG !== 'undefined' && CFG.MIN_BUYOUT_SAMPLE_UNITS) ? CFG.MIN_BUYOUT_SAMPLE_UNITS : 10);
+      if (completed < minSample) {
+        return {
+          rate: defRate,
+          percent: defPct,
+          source: 'Параметры!B8',
+          blocked: defRate === 0,
+          warning: 'выкуп: малая выборка (' + completed + ' шт < ' + minSample +
+            (ret > 0 ? ', возвр. ' + ret : '') + '), взят Параметры!B8'
+        };
+      }
+      const completedFrac = deliv / completed;
+      return {
+        rate: completedFrac,
+        percent: Math.round(completedFrac * 10000) / 100,
+        source: 'Продажи!M',
+        blocked: false,
+        warning: null
+      };
+    }
   }
 
   return {
@@ -1317,12 +1351,37 @@ function calculateUnitEconomics() {
     const salesSh = ss.getSheetByName(CFG.SHEETS.SALES);
     if (salesSh && salesSh.getLastRow() >= 2) {
       const sCols = Math.min(Math.max(salesSh.getMaxColumns(), CFG.SALES_COLS), 25);
-      salesSh.getRange(2, 1, salesSh.getLastRow() - 1, sCols).getValues().forEach(function (r) {
+      const sRows = salesSh.getRange(2, 1, salesSh.getLastRow() - 1, sCols).getValues();
+      let needUpdateSalesBuyout = false;
+      let sumSalesDeliv = 0, sumSalesRet = 0;
+      const newColM = [];
+      sRows.forEach(function (r) {
         const oid = String(r[0] || '').trim();
         const sku = String(r[1] || '').trim();
+        const deliv = calcNum_(r[9]);
+        const ret = calcNum_(r[10]);
+        const curM = calcNum_(r[12]);
+        if (deliv !== null && deliv >= 0) sumSalesDeliv += deliv;
+        if (ret !== null && ret >= 0) sumSalesRet += ret;
+        if (deliv !== null && deliv > 0 && ret !== null && ret >= 0 && curM !== null && curM > 0 && curM <= 100) {
+          const truePct = Math.round((deliv / (deliv + ret)) * 10000) / 100;
+          if (Math.abs(curM - truePct) > 0.01) {
+            r[12] = truePct;
+            needUpdateSalesBuyout = true;
+          }
+        }
+        newColM.push([r[12] !== undefined ? r[12] : '']);
         if (oid && !salesByOffer[oid]) salesByOffer[oid] = r;
         if (sku && !salesBySku[sku]) salesBySku[sku] = r;
       });
+      if (needUpdateSalesBuyout && sRows.length > 0 && sCols >= 13) {
+        try {
+          salesSh.getRange(2, 13, newColM.length, 1).setValues(newColM);
+          if ((sumSalesDeliv + sumSalesRet) > 0 && salesSh.getMaxRows() >= 6 && salesSh.getMaxColumns() >= 16) {
+            salesSh.getRange(6, 16).setValue(Math.round((sumSalesDeliv / (sumSalesDeliv + sumSalesRet)) * 10000) / 100);
+          }
+        } catch (eUpdM) {}
+      }
       try {
         if (salesSh.getMaxRows() >= 9 && salesSh.getMaxColumns() >= 16) {
           const p9Val = salesSh.getRange(9, 16).getValue();
@@ -1500,7 +1559,7 @@ function calculateUnitEconomics() {
       if (curPrice === null || curPrice <= 0) errors.push('нет цены в Ozon');
 
       const salesBuyoutRaw = sRow ? sRow[12] : '';
-      const buyoutInfo = resolveItemBuyout_(salesBuyoutRaw, params.buyoutDefault);
+      const buyoutInfo = resolveItemBuyout_(salesBuyoutRaw, params.buyoutDefault, sRow, CFG.MIN_BUYOUT_SAMPLE_UNITS);
       if (buyoutInfo.warning) warnings.push(buyoutInfo.warning);
       if (buyoutInfo.source === 'Продажи!M') buyoutFromSales++;
       else buyoutFallback++;
@@ -1689,10 +1748,23 @@ function calculateUnitEconomics() {
       let fbsTargetRounded = null;
       let fboAdvantageRub = null;
       if (!buyoutInfo.blocked && fr) {
-        const commFbo = resolveItemCommission_(cRow, fr, 'FBO');
-        const commFbs = resolveItemCommission_(null, fr, 'FBS');
-        const cFbo = commFbo.rate !== null ? commFbo.rate : c;
-        const cFbs = commFbs.rate !== null ? commFbs.rate : c;
+        const tarFbo = resolveItemCommission_(null, fr, 'FBO').rate;
+        const tarFbs = resolveItemCommission_(null, fr, 'FBS').rate;
+        let cFbo = c;
+        let cFbs = c;
+        if (commInfo.source === 'Комиссия факт!J' && tarFbo !== null && tarFbs !== null) {
+          const spread = tarFbs - tarFbo;
+          if (scheme === 'FBO') {
+            cFbo = c;
+            cFbs = Math.max(0.01, Math.min(0.95, c + spread));
+          } else {
+            cFbs = c;
+            cFbo = Math.max(0.01, Math.min(0.95, c - spread));
+          }
+        } else {
+          if (tarFbo !== null) cFbo = tarFbo;
+          if (tarFbs !== null) cFbs = tarFbs;
+        }
         const hFbo = Math.max(0, 1 - cFbo - d);
         const hFbs = Math.max(0, 1 - cFbs - d);
         if (directFbo !== null && hFbo > 0) {
