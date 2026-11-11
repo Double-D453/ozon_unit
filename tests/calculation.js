@@ -414,6 +414,26 @@ const bCompleted = resolveItemBuyout_(50, 1.0, ['Щит', 2, 'Щит', 50000, 38
 near(bCompleted.percent, 95, 0.01, 'При выборке 19 доставленных и 1 возврате (>= 10 шт.) выкуп считается как 19/(19+1) = 95% (без заказов в пути и отмен)');
 assert(bCompleted.source === 'Продажи!M', 'При выборке >= 10 шт. источник выкупа — Продажи!M');
 
+// Проверяем 5 логических блоков и 16 главных видимых колонок на 1 экран (при свёрнутых группах [+])
+const groupedSet = {};
+(CFG.CALC_COLUMN_GROUPS || []).forEach(function (grp) {
+  for (let c = grp[0]; c < grp[0] + grp[1]; c++) groupedSet[c] = true;
+});
+const visibleCols = [];
+for (let c = 1; c <= CFG.CALC_COLS; c++) {
+  if (!groupedSet[c]) visibleCols.push(c);
+}
+assert(visibleCols.length === 16, 'На главном экране «Расчёт» при свёрнутых [+] должно оставаться ровно 16 ключевых колонок (получено ' + visibleCols.length + ')');
+assert(visibleCols.indexOf(19) >= 0 && visibleCols.indexOf(44) >= 0,
+  'Колонки S (19 — ДРР, %) и AR (44 — Выкуплено за период, шт) должны быть открыты на главном экране');
+const banner3 = calcSh.getRange(3, 1, 1, CFG.CALC_COLS).getValues()[0];
+assert(String(banner3[0]).indexOf('1. ТОВАР') >= 0 &&
+       String(banner3[8]).indexOf('2. ЗАТРАТЫ') >= 0 &&
+       String(banner3[20]).indexOf('3. ЦЕНЫ') >= 0 &&
+       String(banner3[35]).indexOf('4. ПРИБЫЛЬ') >= 0 &&
+       String(banner3[53]).indexOf('5. АКЦИИ') >= 0,
+  'Строка 3 на листе «Расчёт» должна содержать заголовки 5 логических блоков над видимыми колонками');
+
 onOpen();
 
 console.log('РАСЧЁТ Э2/Э3 И UX/UI (calculation.js): ВСЕ ПРОВЕРКИ ПРОШЛИ ✓');
