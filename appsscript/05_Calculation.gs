@@ -54,7 +54,7 @@ function calcHeaders_() {
     'Логистика с возвратами, ₽',       // 15 O
     'Эквайринг, ₽',                    // 16 P
     'Комиссия, %',                     // 17 Q
-    'Источник комиссии',               // 18 R
+    'Комиссия Ozon, ₽',                // 18 R (Предельная цена сейчас × Комиссия %)
     'ДРР, %',                          // 19 S
     'Запас цены (headroom), %',        // 20 T
     'Предельная цена (сейчас), ₽',     // 21 U (единая цена в «Ценах» и «Акциях от Ozon», marketing_seller_price)
@@ -92,7 +92,8 @@ function calcHeaders_() {
     'ABC по прибыли',                  // 53 BA (A 80% / B 15% / C 5% / УБЫТОК / Нет продаж)
     'Цена для мин. бустинга (акция Ozon), ₽', // 54 BB (max_action_price из «Акции!G»)
     'Решение по акции / бустингу (Предельная цена)', // 55 BC (В акции / Выбор / Выйти из акции: Предельная > BB)
-    'Реком. Предельная цена без акций, ₽' // 56 BD (ОкрВверх(Целевая × (1 + B18), B11))
+    'Реком. Предельная цена без акций, ₽', // 56 BD (ОкрВверх(Целевая × (1 + B18), B11))
+    'Источник комиссии'                // 57 BE (Комиссия факт!J / Факт Ozon!W / Номенклатура)
   ];
 }
 
@@ -1633,7 +1634,7 @@ function calculateUnitEconomics() {
           '',
           acquiring !== null ? calcRound2_(acquiring) : '',
           commInfo.percent !== null ? commInfo.percent : '',
-          commInfo.source,
+          (curPrice !== null && curPrice > 0 && commInfo.percent !== null) ? calcRound2_(curPrice * commInfo.percent / 100) : '',
           drrPct,
           '',
           curPrice !== null && curPrice > 0 ? calcRound2_(curPrice) : '',
@@ -1665,6 +1666,7 @@ function calculateUnitEconomics() {
           skippedDecisionText,
           ''
         ]);
+        calcRows[calcRows.length - 1].push(commInfo.source); // BE (индекс 56): источник комиссии, в группе [+]
         return;
       }
 
@@ -1872,7 +1874,7 @@ function calculateUnitEconomics() {
         totalLogistics !== null ? calcRound2_(totalLogistics) : '',
         calcRound2_(acq),
         commInfo.percent,
-        commInfo.source,
+        (curPrice !== null && curPrice > 0 && commInfo.percent !== null) ? calcRound2_(curPrice * commInfo.percent / 100) : '',
         drrPct,
         Math.round(h * 10000) / 100,
         calcRound2_(curPrice),
@@ -1912,6 +1914,7 @@ function calculateUnitEconomics() {
         mainDecisionText,
         recommendedNoActionRounded !== null ? calcRound2_(recommendedNoActionRounded) : ''
       ]);
+      calcRows[calcRows.length - 1].push(commInfo.source); // BE (индекс 56): источник комиссии, в группе [+]
     });
 
     // ABC-классификация по прибыли на объём продаж (заполняет 53-ю колонку BA, индекс 52)
@@ -2165,75 +2168,59 @@ function resetSheetFilter_(sh, headerRow, totalRows, numCols) {
  * ровно 16 главных управленческих колонок в 5 логических блоках.
  */
 function setupCalcColumnGroups_(sh) {
-  if (!sh || typeof sh.getRange !== 'function') return;
+  if (!sh || typeof sh.getRange !== 'function') return { created: 0, failed: ['нет листа'] };
+  const report = { cleared: 0, created: 0, collapsed: 0, failed: [] };
+  const groups = CFG.CALC_COLUMN_GROUPS || [];
   try {
-    if (typeof sh.expandAllColumnGroups === 'function') sh.expandAllColumnGroups();
     if (typeof sh.showColumns === 'function') {
       try { sh.showColumns(1, CFG.CALC_COLS); } catch (eShow) {}
     }
-
-    // 1. Полный сброс старых групп по каждому столбцу (исправляет накопление уровней глубины в Google Sheets)
-    const fullRow = sh.getRange(1, 1, 1, CFG.CALC_COLS);
-    if (fullRow && typeof fullRow.shiftColumnGroupDepth === 'function') {
-      for (let d = 0; d < 4; d++) {
-        try { fullRow.shiftColumnGroupDepth(-1); } catch (e0) { break; }
-      }
-    }
-    for (let pass = 0; pass < 8; pass++) {
-      let anyRemoved = false;
-      for (let c = 1; c <= CFG.CALC_COLS; c++) {
+    // 1. Снимаем все старые группы столбцов. Только там, где глубина > 0:
+    //    сдвиг глубины у столбца без группы (A) Google Sheets не разрешает.
+    for (let c = 1; c <= CFG.CALC_COLS; c++) {
+      let depth = 0;
+      try { depth = sh.getColumnGroupDepth(c) || 0; } catch (eD) { depth = 0; }
+      for (let k = 0; k < depth && k < 8; k++) {
         try {
-          if (typeof sh.getColumnGroup === 'function') {
-            const cg = sh.getColumnGroup(c, 1);
-            if (cg && typeof cg.remove === 'function') {
-              cg.remove();
-              anyRemoved = true;
-              continue;
-            }
-          }
-        } catch (eCg) {}
-        try {
-          const depth = typeof sh.getColumnGroupDepth === 'function' ? sh.getColumnGroupDepth(c) : 0;
-          if (depth > 0) {
-            sh.getRange(1, c, 1, 1).shiftColumnGroupDepth(-depth);
-            anyRemoved = true;
-          }
-        } catch (eDepth) {
-          try {
-            sh.getRange(1, c, 1, 1).shiftColumnGroupDepth(-1);
-            anyRemoved = true;
-          } catch (eOne) {}
+          sh.getRange(1, c, 1, 1).shiftColumnGroupDepth(-1);
+          report.cleared++;
+        } catch (eS) {
+          report.failed.push('сброс ' + c + ': ' + eS);
+          break;
         }
       }
-      if (!anyRemoved) break;
     }
-
-    // 2. Создаём чистые одноуровневые группы деталей [+] и сворачиваем их
-    const groups = CFG.CALC_COLUMN_GROUPS || [];
+    // 2. Создаём одноуровневые группы [+] (диапазоны не соседствуют, поэтому не сливаются)
     groups.forEach(function (grp) {
       try {
         sh.getRange(1, grp[0], 1, grp[1]).shiftColumnGroupDepth(1);
-      } catch (eg) {}
+        report.created++;
+      } catch (eg) {
+        report.failed.push('группа ' + grp[0] + '..' + (grp[0] + grp[1] - 1) + ': ' + eg);
+      }
     });
     if (typeof sh.setColumnGroupControlPosition === 'function' &&
-        typeof SpreadsheetApp !== 'undefined' &&
-        SpreadsheetApp.GroupControlTogglePosition) {
-      try {
-        sh.setColumnGroupControlPosition(SpreadsheetApp.GroupControlTogglePosition.AFTER);
-      } catch (ePos) {}
+        typeof SpreadsheetApp !== 'undefined' && SpreadsheetApp.GroupControlTogglePosition) {
+      try { sh.setColumnGroupControlPosition(SpreadsheetApp.GroupControlTogglePosition.AFTER); } catch (ePos) {}
     }
-    if (typeof sh.collapseAllColumnGroups === 'function') {
-      try { sh.collapseAllColumnGroups(); } catch (eColAll) {}
-    }
+    // 3. Сворачиваем детали (кнопки [+] остаются над нужными колонками)
     groups.forEach(function (grp) {
       try {
-        if (typeof sh.getColumnGroup === 'function') {
-          const cg = sh.getColumnGroup(grp[0], 1);
-          if (cg && typeof cg.collapse === 'function') cg.collapse();
-        }
-      } catch (eColGrp) {}
+        const cg = sh.getColumnGroup(grp[0], 1);
+        cg.collapse();
+        report.collapsed++;
+      } catch (eC) {
+        report.failed.push('свернуть ' + grp[0] + ': ' + eC);
+      }
     });
-  } catch (e) {}
+  } catch (e) {
+    report.failed.push('общая ошибка: ' + e);
+  }
+  const msg = 'Группы «Расчёт»: создано ' + report.created + ' из ' + groups.length +
+    ', свёрнуто ' + report.collapsed + ', сброшено уровней ' + report.cleared +
+    (report.failed.length ? '. ОШИБКИ: ' + report.failed.join(' | ') : '');
+  try { logMsg_(report.failed.length ? 'ERROR' : 'INFO', msg); } catch (eL) {}
+  return report;
 }
 
 /**
@@ -2305,7 +2292,7 @@ function styleCalcSheet_(sh, calcRows, summary, params) {
   //   16 главных видимых колонок: A(0), C(2) | I(8), O(14), Q(16), S(18) | U(20), Y(24), AG(32), AI(34) | AJ(35), AR(43), AT(45), AZ(51) | BB(53), BC(54)
   const primaryCols = {
     0:1, 2:1,
-    8:1, 14:1, 16:1, 18:1,
+    8:1, 14:1, 16:1, 17:1, 18:1,
     20:1, 24:1, 32:1, 34:1,
     35:1, 43:1, 45:1, 51:1,
     53:1, 54:1
@@ -2376,7 +2363,7 @@ function styleCalcSheet_(sh, calcRows, summary, params) {
       '#,##0.00',        // 15 O: Логистика с возвратами, ₽
       '#,##0.00',        // 16 P: Эквайринг, ₽
       '0.00"%"',         // 17 Q: Комиссия, %
-      '@',               // 18 R: Источник комиссии
+      '#,##0.00',        // 18 R: Комиссия Ozon, ₽
       '0.00"%"',         // 19 S: ДРР, %
       '0.00"%"',         // 20 T: Запас цены, %
       '#,##0',           // 21 U: Цена с акцией, ₽
@@ -2414,7 +2401,8 @@ function styleCalcSheet_(sh, calcRows, summary, params) {
       '@',               // 53 BA: ABC по прибыли
       '#,##0',           // 54 BB: Цена для мин. бустинга (акция Ozon), ₽
       '@',               // 55 BC: Решение по акции / бустингу (Предельная цена)
-      '#,##0'            // 56 BD: Реком. Предельная цена без акций, ₽
+      '#,##0',           // 56 BD: Реком. Предельная цена без акций, ₽
+      '@'                // 57 BE: Источник комиссии
     ];
     const fmts = new Array(n);
 
@@ -2635,6 +2623,7 @@ function styleCalcSheet_(sh, calcRows, summary, params) {
     9: 95,   // I: Ленд-кост, ₽ (Блок 2)
     15: 95,  // O: Логистика с возвратами, ₽ (Блок 2)
     17: 85,  // Q: Комиссия, % (Блок 2)
+    18: 100, // R: Комиссия Ozon, ₽ (Блок 2 — на главном экране!)
     19: 78,  // S: ДРР, % (Блок 2 — на главном экране!)
     21: 95,  // U: Предельная цена сейчас, ₽ (Блок 3)
     25: 95,  // Y: Наценка по Предельной цене, % (Блок 3)

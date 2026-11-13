@@ -237,7 +237,8 @@ near(rOak[8], 311.61, 0.01, 'Дуб: ленд-кост 311.61');
 near(rOak[9], 189.5, 0.01, 'Дуб: прямая логистика 189.5');
 assert(rOak[11] === 100 && rOak[12] === 'Параметры!B8', 'Дуб: пустой выкуп заменён на Параметры!B8 (100%)');
 near(rOak[13], 0, 0.01, 'Дуб: возвраты при выкупе 100% равны 0');
-assert(rOak[16] === 48 && rOak[17] === 'Факт Ozon!W', 'Дуб: комиссия 48% из Факт Ozon!W');
+assert(rOak[16] === 48 && rOak[56] === 'Факт Ozon!W', 'Дуб: комиссия 48% из Факт Ozon!W');
+near(rOak[17], rOak[20] * 0.48, 0.02, 'Дуб: комиссия в рублях R = Предельная цена × 48%');
 assert(rOak[19] === 37, 'Дуб: честный запас цены 1 - 0.48 - 0.15 = 37%');
 near(rOak[24], -36.85, 0.05, 'Дуб: наценка по цене с акцией 1073 ₽ = -36.85%');
 near(rOak[25], 44.37, 0.05, 'Дуб: наценка по цене без акции 1757 ₽ = +44.37%');
@@ -269,7 +270,7 @@ assert(rOak[55] === 1810, 'Дуб: Реком. Предельная цена б�
 // Продажи: доставлено 442 шт, выручка 737 375 ₽ -> должна считаться прибыль на объём продаж в AT (rKlei[45]) и класс A в BA (rKlei[52])
 const rKlei = rows[1];
 assert(rKlei[3] === 'КЛЕИ-РУЧНАЯ', 'Kleiberit: ручная категория сохранена');
-assert(rKlei[16] === 16.32 && rKlei[17] === 'Комиссия факт!J', 'Kleiberit: приоритет комиссии из Комиссия факт!J (16.32%)');
+assert(rKlei[16] === 16.32 && rKlei[56] === 'Комиссия факт!J', 'Kleiberit: приоритет комиссии из Комиссия факт!J (16.32%)');
 assert(rKlei[18] === 8 && rKlei[47] === 'Продажи!G (SKU)', 'Kleiberit: индивидуальный ДРР 8% из Продажи!G');
 assert(rKlei[11] === 100 && rKlei[12] === 'Параметры!B8', 'Kleiberit: выкуп >100% заменён на Параметры!B8');
 assert(String(rKlei[39]).indexOf('> 100%') >= 0, 'Kleiberit: предупреждение о выкупе > 100%');
@@ -332,8 +333,12 @@ assert(String(actUpdated[2][14]).indexOf('ОК: пол ≤ лимита Ozon') >
 // Проверяем UX/UI оформление: закрепление, группировки [+/-], светофор, фильтр, порядок и цвета вкладок
 assert(calcSh.getFrozenRows() === 4, 'На листе «Расчёт» должны быть закреплены 4 строки (KPI-шапка + заголовки)');
 assert(calcSh.getFrozenColumns() === 3, 'На листе «Расчёт» должны быть закреплены 3 колонки (Offer id, SKU, Наименование)');
-assert(calcSh.columnGroups.length === CFG.CALC_COLUMN_GROUPS.length && calcSh.groupsCollapsed === true,
-  'На листе «Расчёт» должны быть созданы и свёрнуты все 9 групп деталей [+/-]');
+assert(calcSh.columnGroups.length === CFG.CALC_COLUMN_GROUPS.length,
+  'На листе «Расчёт» должно быть создано ровно ' + CFG.CALC_COLUMN_GROUPS.length + ' групп деталей [+/-] (получено ' + calcSh.columnGroups.length + ')');
+assert(calcSh.columnGroups.every(function (g) { return g.collapsed === true; }),
+  'Все группы деталей [+/-] на листе «Расчёт» должны быть свёрнуты');
+assert(calcSh.columnGroups.every(function (g) { return g.length === 2 && g[1] >= 1; }),
+  'Каждая группа должна быть одноуровневой (глубина 1) и не пустой');
 assert(calcSh.getFilter() !== null && calcSh.getFilter().range[0] === 4,
   'На листе «Расчёт» должен быть включён автофильтр по строке 4');
 
@@ -423,7 +428,8 @@ const visibleCols = [];
 for (let c = 1; c <= CFG.CALC_COLS; c++) {
   if (!groupedSet[c]) visibleCols.push(c);
 }
-assert(visibleCols.length === 16, 'На главном экране «Расчёт» при свёрнутых [+] должно оставаться ровно 16 ключевых колонок (получено ' + visibleCols.length + ')');
+assert(visibleCols.length === 17, 'На главном экране «Расчёт» при свёрнутых [+] должно оставаться ровно 17 ключевых колонок (получено ' + visibleCols.length + ')');
+assert(visibleCols.indexOf(18) >= 0, 'Колонка R (18 — Комиссия Ozon, ₽) должна быть открыта на главном экране');
 assert(visibleCols.indexOf(19) >= 0 && visibleCols.indexOf(44) >= 0,
   'Колонки S (19 — ДРР, %) и AR (44 — Выкуплено за период, шт) должны быть открыты на главном экране');
 const banner3 = calcSh.getRange(3, 1, 1, CFG.CALC_COLS).getValues()[0];

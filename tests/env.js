@@ -105,7 +105,9 @@ function makeEnv() {
     if (delta < 0) {
       this.sh.columnGroups = [];
     } else if (delta > 0) {
-      this.sh.columnGroups.push([this.col, this.nCols]);
+      const g = [this.col, this.nCols];
+      g.collapsed = false;
+      this.sh.columnGroups.push(g);
     }
     return this;
   };
@@ -154,6 +156,20 @@ function makeEnv() {
   Sheet.prototype.collapseAllColumnGroups = function () { this.groupsCollapsed = true; return this; };
   Sheet.prototype.expandAllColumnGroups = function () { this.groupsCollapsed = false; return this; };
   Sheet.prototype.setColumnGroupControlPosition = function () { return this; };
+  // Как в Apps Script: глубина группы у столбца и доступ к группе для collapse()/remove()
+  Sheet.prototype.getColumnGroupDepth = function (c) {
+    return this.columnGroups.filter(function (g) { return c >= g[0] && c < g[0] + g[1]; }).length;
+  };
+  Sheet.prototype.getColumnGroup = function (c, level) {
+    const hit = this.columnGroups.filter(function (g) { return c >= g[0] && c < g[0] + g[1]; })[level - 1];
+    if (!hit) throw new Error('No column group at ' + c + ' level ' + level);
+    const sh = this;
+    return {
+      collapse: function () { hit.collapsed = true; sh.groupsCollapsed = true; return this; },
+      remove: function () { sh.columnGroups = sh.columnGroups.filter(function (g) { return g !== hit; }); return this; },
+      isCollapsed: function () { return !!hit.collapsed; }
+    };
+  };
   Sheet.prototype.getFilter = function () { return this._filter; };
   Sheet.prototype.clear = function () { this.rows.length = 0; this.bgs.length = 0; return this; };
   Sheet.prototype.setColumnWidth = function () { return this; };
